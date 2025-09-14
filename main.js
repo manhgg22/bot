@@ -8,10 +8,21 @@ dotenv.config();
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
+const startTime = Date.now();
+
 bot.onText(/\/status/, (msg) => {
+  const uptimeMs = Date.now() - startTime;
+  const uptimeMinutes = Math.floor(uptimeMs / 60000);
+  const hours = Math.floor(uptimeMinutes / 60);
+  const minutes = uptimeMinutes % 60;
+
   bot.sendMessage(
     msg.chat.id,
-    "🤖 Bot đang chạy với EMA + RSI + Volume + FVG + Daily Bias + TP/SL.\nĐang quét top coin USDT có thanh khoản cao nhất mỗi 5 phút."
+    `✅ Bot đang chạy bình thường!
+🤖 Cấu hình: EMA + RSI + Volume + FVG + Daily Bias + TP/SL.
+📊 Đang quét top coin USDT có thanh khoản cao nhất mỗi 5 phút.
+⏱ Uptime: ${hours}h ${minutes}m
+🕒 Thời gian hiện tại: ${new Date().toLocaleString()}`
   );
 });
 
