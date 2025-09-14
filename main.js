@@ -4,6 +4,7 @@ import TelegramBot from "node-telegram-bot-api";
 import axios from "axios";
 import cron from "node-cron";
 import { scanSymbol } from "./indicators.js";
+import { addTrade, closeTrade, getOpenTrades } from "./tradeManager.js";
 
 dotenv.config();
 
@@ -40,6 +41,42 @@ bot.onText(/\/status/, (msg) => {
   );
 });
 
+bot.onText(/\/long (.+) (.+) (.+)/, (msg, match) => {
+  const symbol = match[1].toUpperCase();
+  const entry = parseFloat(match[2]);
+  const sl = parseFloat(match[3]);
+  addTrade(symbol, "LONG", entry, sl, bot, msg.chat.id);
+});
+
+// /short BTC-USDT entry sl
+bot.onText(/\/short (.+) (.+) (.+)/, (msg, match) => {
+  const symbol = match[1].toUpperCase();
+  const entry = parseFloat(match[2]);
+  const sl = parseFloat(match[3]);
+  addTrade(symbol, "SHORT", entry, sl, bot, msg.chat.id);
+});
+
+// /close SOL-USDT
+bot.onText(/\/close (.+)/, (msg, match) => {
+  const symbol = match[1].toUpperCase();
+  closeTrade(symbol, bot, msg.chat.id, "Đóng thủ công");
+});
+
+// /positions -> xem lệnh đang mở
+bot.onText(/\/positions/, (msg) => {
+  const trades = getOpenTrades();
+  if (trades.length === 0) {
+    bot.sendMessage(msg.chat.id, "📭 Không có lệnh nào đang được theo dõi.");
+  } else {
+    const text = trades
+      .map(
+        t =>
+          `${t.symbol} | ${t.direction} | Entry: ${t.entry} | TP: ${t.tp} | SL: ${t.sl}`
+      )
+      .join("\n");
+    bot.sendMessage(msg.chat.id, `📊 Lệnh đang theo dõi:\n${text}`);
+  }
+});
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }

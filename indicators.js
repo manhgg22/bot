@@ -1,5 +1,6 @@
 import { getCandles } from "./okx.js";
 import { findSwingPoints, findOrderBlock, checkRetest } from "./smc.js";
+import { getOpenTrades, closeTrade } from "./tradeManager.js";
 
 // ==== EMA ====
 export function calcEMA(values, period) {
@@ -98,62 +99,39 @@ function calcTpSl(direction, ob, entryPrice) {
 
 // ==== Hàm quét & lọc tín hiệu ====
 export async function scanSymbol(symbol, bot, chatId) {
-  try {
-    const [candles15m, candles1h, candles4h, dailyBias] = await Promise.all([
-      getCandles(symbol, "15m", 100),
-      getCandles(symbol, "1H", 100),
-      getCandles(symbol, "4H", 100),
-      getDailyBias(symbol),
-    ]);
+  const signals = await getSignals(symbol); // hàm cũ của bạn tính EMA, RSI...
+  const trades = getOpenTrades();
+  const trade = trades.find(t => t.symbol === symbol);
 
-    const dir15 = getDirection(candles15m);
-    const dir1h = getDirection(candles1h);
-    const dir4h = getDirection(candles4h);
-
-    if (dir15 === dir1h && dir1h === dir4h && dir1h === dailyBias) {
-      const closes = candles1h.map(c => c.close);
-      const ema20 = calcEMA(closes, 20);
-      const ema50 = calcEMA(closes, 50);
-      const lastEMA20 = ema20[ema20.length - 1];
-      const lastEMA50 = ema50[ema50.length - 1];
-      const price = closes[closes.length - 1];
-
-      if (dir1h === "BULLISH" && !(price > lastEMA50 && lastEMA20 > lastEMA50)) return;
-      if (dir1h === "BEARISH" && !(price < lastEMA50 && lastEMA20 < lastEMA50)) return;
-
-      const rsi = calcRSI(candles15m);
-      if (dir1h === "BULLISH" && rsi < 35) return;
-      if (dir1h === "BEARISH" && rsi > 65) return;
-
-      const vols = candles1h.map(c => Number(c.vol));
-      const avgVol = vols.slice(-20).reduce((a, b) => a + b, 0) / 20;
-      const lastVol = vols[vols.length - 1];
-      if (lastVol < avgVol) return;
-
-      const ob = findOrderBlock(candles1h, dir1h);
-      const fvg = findFVG(candles1h, dir1h);
-      if (!checkFVG(price, fvg)) return;
-
-      const signal = checkRetest(price, ob, dir1h);
-
-      if (signal) {
-        const { tp, sl } = calcTpSl(dir1h, ob, price);
-        const text = 
-`📊 ${symbol}
-Hướng: ${dir1h === "BULLISH" ? "LONG ✅" : "SHORT 🔻"} (Daily Bias: ${dailyBias})
-Giá hiện tại: ${price}
-EMA20: ${lastEMA20.toFixed(2)} | EMA50: ${lastEMA50.toFixed(2)}
-RSI(15m): ${rsi.toFixed(2)} | Volume: ${(lastVol / avgVol * 100).toFixed(1)}%
-FVG: ${fvg ? `${fvg.low} - ${fvg.high}` : "Không có"}
-Vùng OB: ${ob ? `${ob.low} - ${ob.high}` : "Không xác định"}
-🎯 TP: ${tp ? tp.toFixed(4) : "?"}
-🛑 SL: ${sl ? sl.toFixed(4) : "?"}`;
-
-        console.log(text);
-        if (bot && chatId) await bot.sendMessage(chatId, text);
-      }
+  // Nếu có lệnh đang theo dõi, check TP/SL hoặc đảo chiều
+  if (trade) {
+    if (
+      (trade.direction === "LONG" && signals.price <= trade.sl) ||
+      (trade.direction === "SHORT" && signals.price >= trade.sl)
+    ) {
+      bot.sendMessage(
+        chatId,
+        `❌ [STOP LOSS] ${symbol}: Giá chạm SL (${trade.sl}). Đóng lệnh ${trade.direction}`
+      );
+      closeTrade(symbol, bot, chatId, "Hit SL");
+    } else if (
+      (trade.direction === "LONG" && signals.price >= trade.tp) ||
+      (trade.direction === "SHORT" && signals.price <= trade.tp)
+    ) {
+      bot.sendMessage(
+        chatId,
+        `✅ [TAKE PROFIT] ${symbol}: Giá chạm TP (${trade.tp}). Đóng lệnh ${trade.direction}`
+      );
+      closeTrade(symbol, bot, chatId, "Hit TP");
+    } else if (
+      (trade.direction === "LONG" && signals.direction === "SHORT") ||
+      (trade.direction === "SHORT" && signals.direction === "LONG")
+    ) {
+      bot.sendMessage(
+        chatId,
+        `🚨 [EXIT] ${symbol}: Tín hiệu đảo chiều sang ${signals.direction}. Đề nghị thoát lệnh!`
+      );
+      closeTrade(symbol, bot, chatId, "Đảo chiều tín hiệu");
     }
-  } catch (err) {
-    console.error(`❌ Lỗi khi quét ${symbol}:`, err.message);
   }
 }
