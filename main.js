@@ -25,19 +25,17 @@ app.listen(PORT, () => {
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 const startTime = Date.now();
 
-// --- TÙY CHỌN MENU LỆNH (KEYBOARD) ---
 const menuOptions = {
   reply_markup: {
     keyboard: [
       ["/status", "/positions"],
-      ["/scan_top_100", "/scan_all_coins"], // Cập nhật menu
+      ["/scan_top_100", "/scan_all_coins"],
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
   },
 };
 
-// Biến cờ để ngăn chặn việc quét chồng chéo
 let isScanning = false;
 
 bot.onText(/\/start/, (msg) => {
@@ -61,7 +59,6 @@ bot.onText(/\/status/, (msg) => {
   );
 });
 
-// --- Các lệnh quản lý trade (giữ nguyên) ---
 bot.onText(/\/long (.+) (.+) (.+)/, (msg, match) => {
   const symbol = match[1].toUpperCase();
   const entry = parseFloat(match[2]);
@@ -94,49 +91,42 @@ bot.onText(/\/positions/, (msg) => {
         bot.sendMessage(msg.chat.id, `📊 Lệnh đang theo dõi:\n${text}`);
     }
 });
-// ---------------------------------------------
 
-
-// [ĐỔI TÊN] Quét top 100 coin
 bot.onText(/\/scan_top_100/, async (msg) => {
     if (isScanning) {
         return bot.sendMessage(msg.chat.id, "⚠️ Bot đang trong quá trình quét, vui lòng thử lại sau.");
     }
     bot.sendMessage(msg.chat.id, "🔎 Bắt đầu quét tín hiệu top 100 coin...");
-    const symbols = await getSymbols(100); // Lấy top 100
+    const symbols = await getSymbols(100);
     if(symbols.length > 0) {
-        await scanAll(symbols, 'manual_top_100', msg.chat.id);
-        bot.sendMessage(msg.chat.id, "✅ Đã quét xong top 100 coin!");
+        const signalCount = await scanAll(symbols, 'manual_top_100', msg.chat.id);
+        bot.sendMessage(msg.chat.id, `✅ Đã quét xong top 100 coin! Tìm thấy ${signalCount} tín hiệu mới.`);
     } else {
-        bot.sendMessage(msg.chat.id, "⚠️ Không thể lấy danh sách top coins để quét.");
+        bot.sendMessage(msg.chat.id, "⚠️ Lỗi: Không thể lấy danh sách top 100 coin để quét.");
     }
 });
 
-// [MỚI] Quét tất cả coin
 bot.onText(/\/scan_all_coins/, async (msg) => {
     if (isScanning) {
         return bot.sendMessage(msg.chat.id, "⚠️ Bot đang trong quá trình quét, vui lòng thử lại sau.");
     }
     bot.sendMessage(msg.chat.id, "⏳ Bắt đầu quét TOÀN BỘ coin trên OKX. Quá trình này sẽ mất nhiều thời gian, vui lòng kiên nhẫn...");
-    const symbols = await getSymbols(null); // Lấy tất cả
+    const symbols = await getSymbols(null);
     if(symbols.length > 0) {
         bot.sendMessage(msg.chat.id, `🔎 Tìm thấy ${symbols.length} cặp coin-USDT. Bắt đầu quét...`);
-        await scanAll(symbols, 'manual_full', msg.chat.id);
-        bot.sendMessage(msg.chat.id, `✅ Đã quét xong toàn bộ ${symbols.length} coin!`);
+        const signalCount = await scanAll(symbols, 'manual_full', msg.chat.id);
+        bot.sendMessage(msg.chat.id, `✅ Đã quét xong toàn bộ ${symbols.length} coin! Tìm thấy ${signalCount} tín hiệu mới.`);
     } else {
-        bot.sendMessage(msg.chat.id, "⚠️ Không thể lấy danh sách toàn bộ coins để quét.");
+        bot.sendMessage(msg.chat.id, "⚠️ Lỗi: Không thể lấy danh sách toàn bộ coins để quét.");
     }
 });
-
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// [NÂNG CẤP] Lấy danh sách coin
 async function getSymbols(limit = 100) {
   try {
-    // Nếu có limit, lấy top coin theo volume
     if (limit) {
       const res = await axios.get("https://www.okx.com/api/v5/market/tickers", {
         params: { instType: "SPOT" }
@@ -146,14 +136,12 @@ async function getSymbols(limit = 100) {
         .sort((a, b) => Number(b.volCcy24h) - Number(a.volCcy24h))
         .slice(0, limit)
         .map(t => t.instId);
-    }
-    // Nếu không có limit, lấy tất cả các cặp SPOT
-    else {
+    } else {
       const res = await axios.get("https://www.okx.com/api/v5/public/instruments", {
         params: { instType: "SPOT" }
       });
       return res.data.data
-        .filter(t => t.instId.endsWith("-USDT"))
+        .filter(t => t.instId.endsWith("-USDT") && t.state === 'live') // Chỉ lấy coin đang giao dịch
         .map(t => t.instId);
     }
   } catch (err) {
@@ -162,44 +150,50 @@ async function getSymbols(limit = 100) {
   }
 }
 
+// [NÂNG CẤP] Hàm này giờ sẽ trả về số lượng tín hiệu tìm thấy
 async function scanAll(symbols, mode = "initial", chatId) {
-  isScanning = true; // Bắt đầu quét
+  isScanning = true;
+  let signalFoundCount = 0; // Biến đếm tín hiệu
   const totalSymbols = symbols.length;
-  const modeText = {
-      initial: "ngay khi khởi động",
-      cron: "định kỳ (mỗi 5 phút)",
-      manual_top_100: "thủ công top 100",
-      manual_full: "thủ công toàn bộ sàn"
-  };
-  console.log(`🔎 [BOT] Bắt đầu quét ${modeText[mode] || "..."}`);
+  const isManualScan = mode.startsWith('manual');
+
+  console.log(`🔎 [BOT] Bắt đầu quét (chế độ: ${mode})...`);
 
   try {
     for (let i = 0; i < totalSymbols; i++) {
         const sym = symbols[i];
         console.log(`🔄 [BOT] (${i + 1}/${totalSymbols}) Đang quét: ${sym}...`);
         
-        // Gửi thông báo tiến trình cho quét toàn bộ
         if (mode === 'manual_full' && (i + 1) % 100 === 0 && chatId) {
             bot.sendMessage(chatId, `⏳ Đã quét ${i + 1}/${totalSymbols} coin...`);
         }
 
-        await scanSymbol(sym, bot, process.env.TELEGRAM_CHAT_ID);
-        await sleep(300); // Tăng delay một chút để an toàn hơn khi quét nhiều
+        // `scanSymbol` sẽ trả về `true` nếu tìm thấy tín hiệu
+        const hasSignal = await scanSymbol(sym, bot, process.env.TELEGRAM_CHAT_ID);
+        if (hasSignal) {
+            signalFoundCount++;
+        }
+        await sleep(300);
     }
   } catch(error) {
-      console.error(`❌ [BOT] Đã xảy ra lỗi trong quá trình quét:`, error);
+      console.error(`❌ [BOT] Đã xảy ra lỗi nghiêm trọng trong quá trình quét:`, error);
       if (chatId) {
           bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong quá trình quét, vui lòng kiểm tra console log.");
       }
   } finally {
-    console.log(`✅ [BOT] Hoàn thành quét ${modeText[mode] || "..."}.`);
-    isScanning = false; // Kết thúc quét
+    console.log(`✅ [BOT] Hoàn thành quét (chế độ: ${mode}).`);
+    isScanning = false;
+    
+    // [MỚI] Nếu là quét thủ công và không tìm thấy gì, hãy thông báo
+    if (isManualScan && signalFoundCount === 0 && chatId) {
+        bot.sendMessage(chatId, "✅ Đã quét xong. Không tìm thấy tín hiệu mới nào phù hợp.");
+    }
   }
+  return signalFoundCount; // Trả về số lượng tín hiệu
 }
 
 async function main() {
   console.log("🚀 [BOT] Khởi động bot...");
-  // Khi khởi động và chạy định kỳ, chỉ quét top 100 cho hiệu quả
   const symbols = await getSymbols(100); 
 
   if (!symbols.length) {
