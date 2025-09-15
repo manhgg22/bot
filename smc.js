@@ -44,3 +44,29 @@ export function checkRetest(price, ob, direction) {
   if (direction === "BEARISH" && price <= ob.high && price >= ob.low) return "SHORT";
   return null;
 }
+// smc.js
+// ... giữ nguyên các hàm findSwingPoints, findOrderBlock, v.v. của bạn
+
+// Lấy swing high/low gần nhất (dễ hiểu, dựa trên findSwingPoints đã có)
+export function lastSwingHighLow(candles) {
+  const swings = findSwingPoints(candles); // giả định trả về mảng {index, price, type: 'SWING_HIGH'|'SWING_LOW'}
+  const lastHigh = [...swings].reverse().find(s => s.type === "SWING_HIGH");
+  const lastLow  = [...swings].reverse().find(s => s.type === "SWING_LOW");
+  return { lastHigh, lastLow };
+}
+
+// Phát hiện BOS đơn giản: giá đóng cửa phá qua swing gần nhất theo hướng kỳ vọng
+export function detectBOS(candles, wantDirection = "BULLISH") {
+  if (candles.length < 50) return false;
+  const { lastHigh, lastLow } = lastSwingHighLow(candles);
+  const close = candles[candles.length - 1].close;
+
+  if (wantDirection === "BULLISH") {
+    if (!lastHigh) return false;
+    return close > lastHigh.price;
+  } else {
+    if (!lastLow) return false;
+    return close < lastLow.price;
+  }
+}
+
