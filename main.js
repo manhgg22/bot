@@ -17,8 +17,6 @@ app.get("/", (req, res) => {
   res.send("✅ Bot is running 🚀");
 });
 
-// (phần cron job và bot Telegram của bạn vẫn giữ nguyên)
-
 app.listen(PORT, () => {
   console.log(`🌐 [BOT] Server đang lắng nghe tại cổng ${PORT}`);
 });
@@ -27,6 +25,23 @@ app.listen(PORT, () => {
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
 const startTime = Date.now();
+
+// --- TÙY CHỌN MENU LỆNH (KEYBOARD) ---
+const menuOptions = {
+  reply_markup: {
+    keyboard: [
+      ["/status", "/positions"], // Hàng 1
+      ["/scan_now"],             // Hàng 2: Nút quét thủ công
+    ],
+    resize_keyboard: true,    // Tự động điều chỉnh kích thước nút
+    one_time_keyboard: false, // Không ẩn menu sau khi bấm
+  },
+};
+
+// Gửi menu chào mừng khi người dùng gõ /start
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, "👋 Chào mừng bạn! Vui lòng chọn một lệnh từ menu bên dưới:", menuOptions);
+});
 
 bot.onText(/\/status/, (msg) => {
   const uptimeMs = Date.now() - startTime;
@@ -37,10 +52,11 @@ bot.onText(/\/status/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
     `✅ Bot đang chạy bình thường!
-🤖 Cấu hình: EMA + RSI + Volume + FVG + Daily Bias + TP/SL.
-📊 Đang quét top coin USDT có thanh khoản cao nhất mỗi 5 phút.
+🤖 Cấu hình: SMC + EMA Crossover.
+📊 Đang quét top 100 coin USDT mỗi 5 phút.
 ⏱ Uptime: ${hours}h ${minutes}m
-🕒 Thời gian hiện tại: ${new Date().toLocaleString()}`
+🕒 Thời gian hiện tại: ${new Date().toLocaleString()}`,
+    menuOptions // Gửi kèm menu để nó luôn hiển thị
   );
 });
 
@@ -51,7 +67,6 @@ bot.onText(/\/long (.+) (.+) (.+)/, (msg, match) => {
   addTrade(symbol, "LONG", entry, sl, bot, msg.chat.id);
 });
 
-// /short BTC-USDT entry sl
 bot.onText(/\/short (.+) (.+) (.+)/, (msg, match) => {
   const symbol = match[1].toUpperCase();
   const entry = parseFloat(match[2]);
@@ -59,13 +74,11 @@ bot.onText(/\/short (.+) (.+) (.+)/, (msg, match) => {
   addTrade(symbol, "SHORT", entry, sl, bot, msg.chat.id);
 });
 
-// /close SOL-USDT
 bot.onText(/\/close (.+)/, (msg, match) => {
   const symbol = match[1].toUpperCase();
   closeTrade(symbol, bot, msg.chat.id, "Đóng thủ công");
 });
 
-// /positions -> xem lệnh đang mở
 bot.onText(/\/positions/, (msg) => {
   const trades = getOpenTrades();
   if (trades.length === 0) {
@@ -73,13 +86,25 @@ bot.onText(/\/positions/, (msg) => {
   } else {
     const text = trades
       .map(
-        t =>
-          `${t.symbol} | ${t.direction} | Entry: ${t.entry} | TP: ${t.tp} | SL: ${t.sl}`
+        t => `${t.symbol} | ${t.direction} | Entry: ${t.entry} | TP: ${t.tp} | SL: ${t.sl}`
       )
       .join("\n");
     bot.sendMessage(msg.chat.id, `📊 Lệnh đang theo dõi:\n${text}`);
   }
 });
+
+// Thêm lệnh để quét thủ công
+bot.onText(/\/scan_now/, async (msg) => {
+    bot.sendMessage(msg.chat.id, "🔎 Bắt đầu quét tín hiệu thủ công, vui lòng chờ...");
+    const symbols = await getTopSymbols(100);
+    if(symbols.length > 0) {
+        await scanAll(symbols, 'manual');
+        bot.sendMessage(msg.chat.id, "✅ Đã quét xong 100 coins!");
+    } else {
+        bot.sendMessage(msg.chat.id, "⚠️ Không thể lấy danh sách top coins để quét.");
+    }
+});
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -105,20 +130,21 @@ async function getTopSymbols(limit = 100) {
 }
 
 async function scanAll(symbols, mode = "initial") {
-  console.log(mode === "initial"
-    ? "🔎 [BOT] Quét tín hiệu ngay khi khởi động..."
-    : "🔁 [BOT] Bắt đầu quét định kỳ (mỗi 5 phút)...");
+    const modeText = {
+        initial: "ngay khi khởi động",
+        cron: "định kỳ (mỗi 5 phút)",
+        manual: "thủ công theo yêu cầu"
+    };
+  console.log(`🔎 [BOT] Bắt đầu quét ${modeText[mode] || "..."}`);
 
   for (let i = 0; i < symbols.length; i++) {
     const sym = symbols[i];
     console.log(`🔄 [BOT] (${i + 1}/${symbols.length}) Đang quét: ${sym}...`);
     await scanSymbol(sym, bot, process.env.TELEGRAM_CHAT_ID);
-    await sleep(200); // delay tránh 429
+    await sleep(250); // Tăng nhẹ delay để tránh bị OKX chặn
   }
 
-  console.log(mode === "initial"
-    ? "✅ [BOT] Hoàn tất quét lần đầu. Chờ 5 phút để cron job chạy."
-    : "✅ [BOT] Hoàn thành quét định kỳ.");
+  console.log(`✅ [BOT] Hoàn thành quét ${modeText[mode] || "..."}.`);
 }
 
 async function main() {
@@ -131,6 +157,8 @@ async function main() {
   }
 
   console.log(`✅ [BOT] Sẽ quét ${symbols.length} cặp coin top volume USDT.`);
+  // Gửi tin nhắn thông báo khởi động và menu cho người dùng
+  bot.sendMessage(process.env.TELEGRAM_CHAT_ID, `🚀 Bot đã khởi động! Sẽ quét ${symbols.length} coin. Gõ /start để hiển thị lại menu.`, menuOptions);
 
   // Quét ngay khi khởi động
   await scanAll(symbols, "initial");

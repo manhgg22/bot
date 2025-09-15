@@ -44,8 +44,6 @@ export function checkRetest(price, ob, direction) {
   if (direction === "BEARISH" && price <= ob.high && price >= ob.low) return "SHORT";
   return null;
 }
-// smc.js
-// ... giữ nguyên các hàm findSwingPoints, findOrderBlock, v.v. của bạn
 
 // Lấy swing high/low gần nhất (dễ hiểu, dựa trên findSwingPoints đã có)
 export function lastSwingHighLow(candles) {
@@ -68,5 +66,42 @@ export function detectBOS(candles, wantDirection = "BULLISH") {
     if (!lastLow) return false;
     return close < lastLow.price;
   }
+}
+
+// Tìm các mức giá chính (hỗ trợ/kháng cự)
+export function findKeyLevels(candles, lookback = 5) {
+  const levels = [];
+  for (let i = lookback; i < candles.length - lookback; i++) {
+    const current = candles[i];
+    const left = candles.slice(i - lookback, i);
+    const right = candles.slice(i + 1, i + lookback);
+    
+    // Kiểm tra xem giá có phải cao nhất/thấp nhất trong khoảng không
+    const isHigh = left.every(c => c.high <= current.high) && 
+                   right.every(c => c.high <= current.high);
+    const isLow = left.every(c => c.low >= current.low) &&
+                  right.every(c => c.low >= current.low);
+    
+    if (isHigh) levels.push({ price: current.high, type: 'resistance' });
+    if (isLow) levels.push({ price: current.low, type: 'support' });
+  }
+  return levels;
+}
+
+// Phát hiện động lượng dựa trên các nến gần đây
+export function detectMomentum(candles, period = 10) {
+  const closes = candles.slice(-period).map(c => c.close);
+  const opens = candles.slice(-period).map(c => c.open);
+  
+  // Đếm số nến mạnh
+  let bullCount = 0, bearCount = 0;
+  for (let i = 0; i < period; i++) {
+    if (closes[i] > opens[i] * 1.001) bullCount++;
+    if (closes[i] < opens[i] * 0.999) bearCount++;
+  }
+
+  if (bullCount > period * 0.7) return "BULLISH";
+  if (bearCount > period * 0.7) return "BEARISH";
+  return "NEUTRAL";
 }
 
