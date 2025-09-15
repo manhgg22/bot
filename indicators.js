@@ -161,7 +161,7 @@ export async function getSignalsSMC(symbol) {
   };
 }
 
-/* ============== [CHIẾN LƯỢC 2 - MỚI] Tín hiệu EMA Crossover ============== */
+/* ============== [CHIẾN LƯỢC 2] Tín hiệu EMA Crossover ============== */
 export async function getSignalsEMACross(symbol) {
     const candles = await getCandles(symbol, "1H", 250);
     if (candles.length < 201) {
@@ -204,42 +204,40 @@ export async function getSignalsEMACross(symbol) {
 }
 
 
-/* ============== Quét & Quản lý lệnh (ĐÃ CẢI TIẾN) ============== */
+/* ============== Quét & Quản lý lệnh (ĐÃ SỬA LỖI) ============== */
 export async function scanSymbol(symbol, bot, chatId) {
   try {
     const m5_candles = await getCandles(symbol, '5m', 2);
     if (!m5_candles.length) return;
     const currentPrice = m5_candles.at(-1).close;
 
-    // 1. Quản lý các lệnh đang mở trước
     const openTrade = getOpenTrades().find(t => t.symbol === symbol);
     if (openTrade) {
       if ((openTrade.direction === "LONG" && currentPrice <= openTrade.sl) ||
           (openTrade.direction === "SHORT" && currentPrice >= openTrade.sl)) {
         bot.sendMessage(chatId, `❌ [STOP LOSS] ${symbol}: Giá chạm SL (${openTrade.sl}). Đóng lệnh ${openTrade.direction}.`);
         closeTrade(symbol, bot, chatId, "Hit SL");
-        return; // Đã xử lý lệnh, không tìm tín hiệu mới nữa
+        return;
       }
       if ((openTrade.direction === "LONG" && currentPrice >= openTrade.tp) ||
           (openTrade.direction === "SHORT" && currentPrice <= openTrade.tp)) {
         bot.sendMessage(chatId, `✅ [TAKE PROFIT] ${symbol}: Giá chạm TP (${openTrade.tp}). Đóng lệnh ${openTrade.direction}.`);
         closeTrade(symbol, bot, chatId, "Hit TP");
-        return; // Đã xử lý lệnh, không tìm tín hiệu mới nữa
+        return;
       }
-      return; // Nếu lệnh vẫn đang chạy, không làm gì thêm
+      return;
     }
 
-    // 2. Nếu không có lệnh mở cho symbol này, thì tìm tín hiệu mới
-    // Ưu tiên tín hiệu SMC chất lượng cao
     let signal = await getSignalsSMC(symbol);
-
-    // Nếu không có tín hiệu SMC, tìm tín hiệu EMA Cross
     if (signal.direction === "NONE") {
         signal = await getSignalsEMACross(symbol);
     }
 
-    // Nếu tìm thấy bất kỳ tín hiệu nào, gửi thông báo
     if (signal.direction !== "NONE") {
+        // [ĐÃ SỬA] Tạo câu lệnh chính xác dựa trên tín hiệu
+        const commandDirection = signal.direction.toLowerCase(); // 'long' hoặc 'short'
+        const entryCommand = `\`/${commandDirection} ${symbol} ${signal.price} ${signal.sl}\``;
+
         const message = `
 🔔 *[TÍN HIỆU MỚI - ${signal.strategy}]*
 *Symbol:* \`${symbol}\` | *${signal.direction}*
@@ -248,11 +246,8 @@ export async function scanSymbol(symbol, bot, chatId) {
 🛑 *Stop Loss:* ${signal.sl.toFixed(5)}
 
 Để vào lệnh, hãy dùng lệnh:
-\`/long ${symbol} ${signal.price} ${signal.sl}\`
-Hoặc
-\`/short ${symbol} ${signal.price} ${signal.sl}\`
+${entryCommand}
 `;
-        // Gửi tín hiệu và không cần comment gì thêm nữa
         bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
     } else {
         console.log(`📊 ${symbol} | Không có tín hiệu mới.`);
