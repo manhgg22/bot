@@ -13,8 +13,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-  res.send("✅ Bot Telegram đang chạy trên Render!");
+  console.log("🔄 [BOT] Ping từ UptimeRobot - giữ bot sống");
+  res.send("✅ Bot is running 🚀");
 });
+
+// (phần cron job và bot Telegram của bạn vẫn giữ nguyên)
 
 app.listen(PORT, () => {
   console.log(`🌐 [BOT] Server đang lắng nghe tại cổng ${PORT}`);
