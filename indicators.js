@@ -1,7 +1,7 @@
 // indicators.js
 import { getCandles, getCurrentPrice } from "./okx.js";
-import { findOrderBlock, detectBOS } from "./smc.js";
-import { getOpenTrades, closeTrade } from "./tradeManager.js";
+import { findOrderBlock, detectBOS, findSwingPoints } from "./smc.js";
+import { getOpenTrades, closeTrade, updateTradeSL } from "./tradeManager.js";
 
 /* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO ============== */
 
@@ -108,13 +108,11 @@ function calcADX(candles, period = 14) {
 
 /**
  * [MỚI] Hàm tính toán chỉ báo Stochastic RSI.
- * Đây là một chỉ báo dao động rất nhạy, dùng để xác định các vùng quá mua/quá bán.
  */
 function calcStochRSI(candles, rsiPeriod = 14, stochPeriod = 14, kPeriod = 3, dPeriod = 3) {
     if (candles.length < rsiPeriod + stochPeriod) {
         return null;
     }
-    // 1. Tính RSI cho toàn bộ chuỗi nến
     const rsiValues = [];
     let gains = 0, losses = 0;
     for (let i = 1; i <= rsiPeriod; i++) {
@@ -138,7 +136,6 @@ function calcStochRSI(candles, rsiPeriod = 14, stochPeriod = 14, kPeriod = 3, dP
     
     if (rsiValues.length < stochPeriod) return null;
 
-    // 2. Tính StochRSI từ chuỗi RSI
     const stochRSI_K = [];
     for (let i = stochPeriod - 1; i < rsiValues.length; i++) {
         const rsiSlice = rsiValues.slice(i - stochPeriod + 1, i + 1);
@@ -151,7 +148,6 @@ function calcStochRSI(candles, rsiPeriod = 14, stochPeriod = 14, kPeriod = 3, dP
     
     if (stochRSI_K.length < dPeriod) return null;
     
-    // 3. Làm mượt K và D
     const smoothK = [];
     for(let i = kPeriod - 1; i < stochRSI_K.length; i++) {
         const kSlice = stochRSI_K.slice(i - kPeriod + 1, i + 1);
@@ -172,6 +168,47 @@ function calcStochRSI(candles, rsiPeriod = 14, stochPeriod = 14, kPeriod = 3, dP
     };
 }
 
+/* ============== CÁC HÀM PHÂN TÍCH PHỤ ============== */
+
+export async function getDailyBias(symbol) {
+    const daily = await getCandles(symbol, "1D", 150);
+    if (!daily || daily.length < 51) return "NEUTRAL";
+    const closes = daily.map(c => c.close);
+    const ema50 = calcEMA(closes, 50).at(-1);
+    const lastClose = closes.at(-1);
+    return lastClose > ema50 ? "BULLISH" : "BEARISH";
+}
+
+async function getHTFBOS(symbol, bias) {
+    const h1_candles = await getCandles(symbol, "1H", 200);
+    if (!h1_candles || h1_candles.length < 50) return { bosH1: false };
+    const bosH1 = detectBOS(h1_candles, bias);
+    return { bosH1 };
+}
+
+async function getLTFEntry(symbol, bias) {
+    const m15_candles = await getCandles(symbol, "15m", 220);
+    if (!m15_candles || m15_candles.length < 50) return null;
+    const price = m15_candles.at(-1).close;
+    const rsi = calcRSI(m15_candles, 14);
+    const ob = findOrderBlock(m15_candles, bias);
+    const fvg = findFVG(m15_candles, bias);
+    const retestOb = ob ? (price >= ob.low && price <= ob.high) : false;
+    const retestFvg = fvg ? (price >= fvg.low && price <= fvg.high) : false;
+    const rsiOk = (bias === "BULLISH") ? rsi >= 45 : rsi <= 55;
+    const atr = calcATR(m15_candles, 14);
+    if (!atr) return null;
+    let sl, tp;
+    const ATR_SL = 1.5, ATR_TP = 3.0;
+    if (bias === "BULLISH") {
+        sl = ob ? Math.min(ob.low, price - ATR_SL * atr) : price - ATR_SL * atr;
+        tp = price + ATR_TP * atr;
+    } else {
+        sl = ob ? Math.max(ob.high, price + ATR_SL * atr) : price + ATR_SL * atr;
+        tp = price - ATR_TP * atr;
+    }
+    return { price, retestOb, retestFvg, rsiOk, tp, sl };
+}
 
 /* ============== CÁC CHIẾN LƯỢC TÌM TÍN HIỆU ============== */
 
@@ -208,6 +245,7 @@ async function getSignalsSMC(symbol) {
         return { direction: "NONE" };
     }
 }
+
 async function getSignalsEMACross(symbol) { 
     try {
         const candles = await getCandles(symbol, "1H", 250); 
@@ -231,6 +269,7 @@ async function getSignalsEMACross(symbol) {
         return { direction: "NONE" };
     }
 }
+
 async function getSignalsBollingerBreakout(symbol) {
     try {
         const candles = await getCandles(symbol, "1H", 50);
@@ -257,12 +296,8 @@ async function getSignalsBollingerBreakout(symbol) {
     }
 }
 
-/**
- * [MỚI] Chiến lược 4: Tìm tín hiệu đảo chiều/hồi phục dựa trên StochRSI
- */
 async function getSignalsStochRSIReversal(symbol) {
     try {
-        // Sử dụng khung H4 để tín hiệu đảo chiều đáng tin cậy hơn
         const candles = await getCandles(symbol, "4H", 100);
         if (!candles || candles.length < 50) return { direction: "NONE" };
         
@@ -273,29 +308,17 @@ async function getSignalsStochRSIReversal(symbol) {
         const oversoldLevel = 20;
         const overboughtLevel = 80;
 
-        // Điều kiện BẮT HỒI (LONG): K cắt lên D từ dưới vùng quá bán
         const isLongSignal = prev_k < oversoldLevel && k > oversoldLevel && k > d;
-
-        // Điều kiện BẮT ĐỈNH (SHORT): K cắt xuống D từ trên vùng quá mua
         const isShortSignal = prev_k > overboughtLevel && k < overboughtLevel && k < d;
 
         if (isLongSignal || isShortSignal) {
             const lastCandle = candles.at(-1);
             const atr = calcATR(candles, 14);
             if (!atr) return { direction: "NONE" };
-            
             const direction = isLongSignal ? "LONG" : "SHORT";
-            // Rủi ro cao hơn nên TP/SL gần hơn
             const sl = isLongSignal ? lastCandle.close - 1.5 * atr : lastCandle.close + 1.5 * atr;
-            const tp = isLongSignal ? lastCandle.close + 3.0 * atr : lastCandle.close - 3.0 * atr; // RR 1:2
-
-            return {
-                strategy: "STOCH_RSI_REVERSAL",
-                direction,
-                price: lastCandle.close,
-                tp,
-                sl
-            };
+            const tp = isLongSignal ? lastCandle.close + 3.0 * atr : lastCandle.close - 3.0 * atr;
+            return { strategy: "STOCH_RSI_REVERSAL", direction, price: lastCandle.close, tp, sl };
         }
         return { direction: "NONE" };
     } catch (error) {
@@ -303,10 +326,7 @@ async function getSignalsStochRSIReversal(symbol) {
     }
 }
 
-
-// [NÂNG CẤP] Thêm chiến lược mới vào quy trình quét
 export async function getAllSignalsForSymbol(symbol) {
-    // Ưu tiên tìm tín hiệu đảo chiều trước, sau đó mới đến các tín hiệu theo xu hướng
     const strategies = [
         getSignalsStochRSIReversal, 
         getSignalsSMC, 
@@ -322,8 +342,8 @@ export async function getAllSignalsForSymbol(symbol) {
     return { direction: "NONE" };
 }
 
-
 /* ============== CÁC HÀM QUẢN LÝ VÀ QUÉT CHÍNH ============== */
+
 export async function monitorOpenTrades(bot, chatId) {
     const openTrades = getOpenTrades();
     if (openTrades.length === 0) return;
