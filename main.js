@@ -10,31 +10,30 @@ import { getCurrentPrice } from "./okx.js";
 
 dotenv.config();
 
-const TOKEN = process.env.TELEGRAM_TOKEN;
-const PORT = process.env.PORT || 3000;
-const RENDER_URL = process.env.RENDER_URL;
-
+// ==== Express server chỉ dùng để giữ cho Render không tắt bot ====
 const app = express();
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
+app.get("/", (req, res) => {
+  res.send("✅ Bot is running using Polling mode 🚀");
+});
+app.listen(PORT, () => {
+  console.log(`🌐 [BOT] Server phụ đang lắng nghe tại cổng ${PORT} để giữ bot hoạt động.`);
+});
+// =============================================================
 
-const bot = new TelegramBot(TOKEN, { polling: process.env.NODE_ENV !== 'production' });
+const TOKEN = process.env.TELEGRAM_TOKEN;
 
-if (process.env.NODE_ENV === 'production') {
-  if (!RENDER_URL) {
-    console.error("LỖI NGHIÊM TRỌNG: Biến môi trường RENDER_URL chưa được thiết lập!");
-    process.exit(1);
-  }
-  const webhookPath = `/bot${TOKEN}`;
-  const fullWebhookUrl = `${RENDER_URL}${webhookPath}`;
-  bot.setWebHook(fullWebhookUrl);
-  console.log(`[BOT] Webhook đã được thiết lập tại: ${fullWebhookUrl}`);
-  app.post(webhookPath, (req, res) => {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-  });
-} else {
-  console.log("[BOT] Bot đang chạy ở chế độ Polling (Development).");
-}
+// [QUAY LẠI CODE CŨ] Khởi tạo bot với polling: true một cách tường minh.
+// Bot sẽ luôn luôn hỏi Telegram để lấy tin nhắn.
+const bot = new TelegramBot(TOKEN, { polling: true });
+
+console.log("[BOT] Bot đang chạy ở chế độ Polling.");
+
+// Ghi lại lỗi Polling để theo dõi, nhưng không làm sập chương trình
+bot.on('polling_error', (error) => {
+  console.log(`[POLLING ERROR] ${error.code}: ${error.message}`);
+});
+
 
 const startTime = Date.now();
 const menuOptions = {
@@ -50,6 +49,7 @@ const menuOptions = {
 };
 let isScanning = false;
 
+// --- Xử lý các lệnh từ người dùng (Toàn bộ phần này giữ nguyên) ---
 bot.onText(/\/start/, (msg) => { bot.sendMessage(msg.chat.id, "👋 Chào mừng! Bot hoạt động trên thị trường Futures.", menuOptions); });
 bot.onText(/\/status/, (msg) => { const uptimeMs = Date.now() - startTime; const uptimeMinutes = Math.floor(uptimeMs / 60000); const hours = Math.floor(uptimeMinutes / 60); const minutes = uptimeMinutes % 60; bot.sendMessage(msg.chat.id, `✅ Bot đang chạy bình thường!\n⏱ Uptime: ${hours}h ${minutes}m`, menuOptions); });
 bot.onText(/\/long (.+) (.+) (.+)/, (msg, match) => { const [_, symbol, entry, sl] = match; addTrade(symbol.toUpperCase(), "LONG", parseFloat(entry), parseFloat(sl), bot, msg.chat.id); });
@@ -103,9 +103,7 @@ async function handleSuggestionRequest(chatId, direction) {
     }
 }
 
-app.get("/", (req, res) => { res.send("✅ Bot Webhook Server is running 🚀"); });
-app.listen(PORT, () => { console.log(`🌐 [BOT] Server đang lắng nghe tại cổng ${PORT}`); });
-
+// --- Các hàm hệ thống ---
 let symbols;
 async function initialize() {
   console.log("🚀 [BOT] Khởi động các tác vụ nền...");
@@ -117,7 +115,7 @@ async function initialize() {
   symbols = await getSymbols(100);
   if (!symbols || !symbols.length) { console.log("⚠️ [BOT] Không tìm thấy coin để quét định kỳ."); return; }
   console.log(`✅ [BOT] Sẽ quét định kỳ ${symbols.length} coin.`);
-  if (process.env.NODE_ENV === 'production') { bot.sendMessage(process.env.TELEGRAM_CHAT_ID, `🚀 Bot đã khởi động trên server!`, menuOptions); }
+  bot.sendMessage(process.env.TELEGRAM_CHAT_ID, `🚀 Bot đã khởi động!`, menuOptions);
   cron.schedule("*/5 * * * *", async () => {
     if (isScanning || !symbols || !symbols.length) { console.log("⚠️ [BOT] Bỏ qua quét định kỳ."); return; }
     await scanAll(symbols, "cron");
