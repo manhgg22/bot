@@ -105,3 +105,45 @@ export function detectMomentum(candles, period = 10) {
   return "NEUTRAL";
 }
 
+// Tìm Fair Value Gap (FVG) - khoảng trống giá
+export function findFVG(candles, direction = "BULLISH") {
+  if (candles.length < 3) return null;
+  
+  // Tìm 3 nến liên tiếp để tạo FVG
+  for (let i = candles.length - 3; i >= 0; i--) {
+    const candle1 = candles[i];
+    const candle2 = candles[i + 1];
+    const candle3 = candles[i + 2];
+    
+    if (direction === "BULLISH") {
+      // FVG tăng: nến 1 và 3 đều tăng, nến 2 tạo khoảng trống
+      if (candle1.close > candle1.open && candle3.close > candle3.open) {
+        const gapLow = Math.max(candle1.high, candle3.low);
+        const gapHigh = Math.min(candle1.high, candle3.low);
+        if (gapHigh > gapLow) {
+          return { low: gapLow, high: gapHigh, type: "BULLISH_FVG" };
+        }
+      }
+    } else {
+      // FVG giảm: nến 1 và 3 đều giảm, nến 2 tạo khoảng trống
+      if (candle1.close < candle1.open && candle3.close < candle3.open) {
+        const gapLow = Math.max(candle1.low, candle3.high);
+        const gapHigh = Math.min(candle1.low, candle3.high);
+        if (gapHigh > gapLow) {
+          return { low: gapLow, high: gapHigh, type: "BEARISH_FVG" };
+        }
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Kiểm tra giá có retest FVG không
+export function checkFVGRetest(price, fvg, direction) {
+  if (!fvg) return false;
+  if (direction === "BULLISH" && price >= fvg.low && price <= fvg.high) return true;
+  if (direction === "BEARISH" && price >= fvg.low && price <= fvg.high) return true;
+  return false;
+}
+

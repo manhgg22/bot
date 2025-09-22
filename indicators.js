@@ -1,7 +1,7 @@
 // indicators.js
 import { getCandles, getCurrentPrice } from "./okx.js";
 import { findOrderBlock, detectBOS, findSwingPoints } from "./smc.js";
-import { getOpenTrades, closeTrade, updateTradeSL } from "./tradeManager.js";
+import { getOpenTrades, closeTrade } from "./tradeManager.js";
 
 /* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO ============== */
 
