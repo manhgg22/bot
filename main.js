@@ -43,7 +43,7 @@ const menuOptions = {
       ["/status", "/positions", "/stats"],
       ["🎯 Tín hiệu tốt nhất", "📊 Phân tích thị trường"],
       ["⚠️ Cảnh báo rủi ro", "🔄 Tín hiệu đảo chiều"],
-      ["/theodoi", "/daily_report"],
+      ["/theodoi", "/daily_report", "/indicators"],
     ],
     resize_keyboard: true,
   },
@@ -64,6 +64,7 @@ bot.onText(/🔄 Tín hiệu đảo chiều/, (msg) => { handleReversalSignals(m
 bot.onText(/📊 Phân tích thị trường/, (msg) => { handleMarketAnalysis(msg.chat.id); });
 bot.onText(/⚠️ Cảnh báo rủi ro/, (msg) => { handleRiskWarnings(msg.chat.id); });
 bot.onText(/\/daily_report/, (msg) => { handleDailyReport(msg.chat.id); });
+bot.onText(/\/indicators/, (msg) => { handleIndicatorsInfo(msg.chat.id); });
 
 // ==== HÀM TÍN HIỆU TỐT NHẤT (TỐI ƯU HÓA) ====
 async function handleBestSignals(chatId) {
@@ -75,15 +76,15 @@ async function handleBestSignals(chatId) {
     isScanning = true;
     
     try {
-        // Chỉ quét top 50 coin có volume cao nhất để tăng tốc độ
-        const symbols = await getSymbols(50);
+        // Quét TOÀN BỘ coin để tìm tín hiệu tốt nhất
+        const symbols = await getSymbols(null);
         if (!symbols || symbols.length === 0) { 
             bot.sendMessage(chatId, "⚠️ Lỗi: Không thể lấy danh sách coin."); 
             return; 
         }
         
         let allSignals = [];
-        const batchSize = 10; // Xử lý theo batch để tăng tốc
+        const batchSize = 15; // Tăng batch size để xử lý nhiều coin hơn
         
         for (let i = 0; i < symbols.length; i += batchSize) {
             const batch = symbols.slice(i, i + batchSize);
@@ -106,9 +107,10 @@ async function handleBestSignals(chatId) {
             const batchResults = await Promise.all(batchPromises);
             allSignals.push(...batchResults.filter(s => s !== null));
             
-            // Cập nhật tiến trình
-            if (i + batchSize < symbols.length) {
-                bot.sendMessage(chatId, `⏳ Đã quét ${Math.min(i + batchSize, symbols.length)}/${symbols.length} coin...`);
+            // Cập nhật tiến trình mỗi 100 coin
+            const processed = Math.min(i + batchSize, symbols.length);
+            if (processed % 100 === 0 || processed === symbols.length) {
+                bot.sendMessage(chatId, `⏳ Đã quét ${processed}/${symbols.length} coin... Tìm thấy ${allSignals.length} tín hiệu.`);
             }
             
             await sleep(100); // Giảm delay để tăng tốc
@@ -119,9 +121,9 @@ async function handleBestSignals(chatId) {
             return; 
         }
         
-        // Sắp xếp theo điểm chất lượng và chỉ lấy top 8
+        // Sắp xếp theo điểm chất lượng và chỉ lấy top 10
         allSignals.sort((a, b) => b.qualityScore - a.qualityScore);
-        const topSignals = allSignals.slice(0, 8);
+        const topSignals = allSignals.slice(0, 10);
         
         let reportMessage = "🎯 *TOP TÍN HIỆU TỐT NHẤT HÔM NAY*\n";
         reportMessage += "_(Sắp xếp theo độ chính xác giảm dần)_\n\n";
@@ -140,7 +142,15 @@ async function handleBestSignals(chatId) {
         });
         
         reportMessage += "💡 *Khuyến nghị:* Chỉ vào lệnh với điểm chất lượng > 70\n";
-        reportMessage += "🛡️ Luôn đặt stop loss và quản lý rủi ro cẩn thận";
+        reportMessage += "🛡️ Luôn đặt stop loss và quản lý rủi ro cẩn thận\n\n";
+        reportMessage += "📊 *CHỈ BÁO ĐƯỢC SỬ DỤNG:*\n";
+        reportMessage += "• ADX: Độ mạnh xu hướng (0-100)\n";
+        reportMessage += "• RSI: Overbought/Oversold (0-100)\n";
+        reportMessage += "• ATR: Biến động giá (Stop Loss)\n";
+        reportMessage += "• Bollinger Bands: Breakout detection\n";
+        reportMessage += "• EMA Cross: Golden/Death cross\n";
+        reportMessage += "• Stochastic RSI: Momentum reversal\n";
+        reportMessage += "• SMC: Order blocks, BOS, Swing points";
         
         bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
         
@@ -179,6 +189,92 @@ function calculateQualityScore(signal) {
     if (rr > 2) score += 5; // Risk/Reward tốt
     
     return Math.min(score, 100);
+}
+
+// ==== THÔNG TIN CHỈ BÁO ====
+function handleIndicatorsInfo(chatId) {
+    const message = `📊 *THÔNG TIN CHỈ BÁO KỸ THUẬT*
+
+🎯 *CHỈ BÁO CHÍNH:*
+
+📈 *ADX (Average Directional Index)*
+• Mục đích: Đo độ mạnh xu hướng
+• Giá trị: 0-100 (càng cao = xu hướng càng mạnh)
+• Sử dụng: Đánh giá độ tin cậy tín hiệu
+• Ngưỡng: >25 = xu hướng mạnh
+
+📊 *RSI (Relative Strength Index)*
+• Mục đích: Đo overbought/oversold
+• Giá trị: 0-100
+• Ngưỡng: >70 = overbought, <30 = oversold
+• Sử dụng: Xác nhận tín hiệu đảo chiều
+
+📉 *ATR (Average True Range)*
+• Mục đích: Đo biến động giá
+• Sử dụng: Tính Stop Loss và Take Profit
+• Công thức: SL = Entry ± (ATR × 1.5-2.5)
+
+📊 *Bollinger Bands*
+• Mục đích: Xác định breakout và mean reversion
+• Cấu hình: SMA 20 ± 2 standard deviations
+• Sử dụng: Phát hiện breakout với volume cao
+
+📈 *EMA (Exponential Moving Average)*
+• Cấu hình: EMA 12, 26, 200
+• Golden Cross: EMA 12 cắt lên EMA 26
+• Death Cross: EMA 12 cắt xuống EMA 26
+• Trend Filter: EMA 200
+
+📊 *Stochastic RSI*
+• Mục đích: Đo momentum
+• Ngưỡng: K<20 = oversold, K>80 = overbought
+• Sử dụng: Phát hiện đảo chiều sớm
+
+🏦 *SMC (Smart Money Concepts)*
+• Order Blocks: Vùng giá quan trọng
+• BOS (Break of Structure): Phá vỡ cấu trúc
+• Swing Points: Điểm đảo chiều
+• Fair Value Gaps: Khoảng trống giá
+
+🎯 *CHIẾN LƯỢC GIAO DỊCH:*
+
+1️⃣ *SMC Strategy*
+• Phân tích Daily bias (EMA 50)
+• Tìm BOS trên H1
+• Entry trên M15 với Order Block/FVG
+• RSI confirmation
+
+2️⃣ *EMA Cross Strategy*
+• EMA 12 cắt EMA 26
+• Filter với EMA 200
+• ATR cho SL/TP
+• Volume confirmation
+
+3️⃣ *Bollinger Breakout*
+• Giá phá vỡ band
+• Volume > 1.8x average
+• ATR cho SL/TP
+• Retest confirmation
+
+4️⃣ *Stochastic RSI Reversal*
+• K cắt D từ oversold/overbought
+• RSI confirmation
+• ATR cho SL/TP
+• 4H timeframe
+
+💡 *HỆ THỐNG ĐIỂM CHẤT LƯỢNG:*
+• ADX: 40 điểm tối đa
+• Chiến lược: 10-25 điểm
+• Risk/Reward: 25 điểm tối đa
+• Bonus: 10-15 điểm
+
+🎯 *KHUYẾN NGHỊ:*
+• Chỉ vào lệnh với điểm > 70
+• Kết hợp nhiều chỉ báo
+• Luôn đặt Stop Loss
+• Quản lý rủi ro cẩn thận`;
+
+    bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
 }
 
 // --- Các hàm hệ thống ---
