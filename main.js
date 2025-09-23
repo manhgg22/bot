@@ -41,11 +41,9 @@ const menuOptions = {
   reply_markup: {
     keyboard: [
       ["/status", "/positions", "/stats"],
-      ["/scan_top_100", "/scan_all_coins"],
-      ["💡 Gợi ý LONG", "💡 Gợi ý SHORT"],
-      ["🔄 Tín hiệu đảo chiều", "📊 Phân tích thị trường"],
-      ["⚠️ Cảnh báo rủi ro", "🎯 Tín hiệu MACD"],
-      ["/theodoi"],
+      ["🎯 Tín hiệu tốt nhất", "📊 Phân tích thị trường"],
+      ["⚠️ Cảnh báo rủi ro", "🔄 Tín hiệu đảo chiều"],
+      ["/theodoi", "/daily_report"],
     ],
     resize_keyboard: true,
   },
@@ -59,55 +57,128 @@ bot.onText(/\/long (.+) (.+) (.+)/, (msg, match) => { const [_, symbol, entry, s
 bot.onText(/\/short (.+) (.+) (.+)/, (msg, match) => { const [_, symbol, entry, sl] = match; addTrade(symbol.toUpperCase(), "SHORT", parseFloat(entry), parseFloat(sl), bot, msg.chat.id); });
 bot.onText(/\/close (.+)/, (msg, match) => { closeTrade(match[1].toUpperCase(), bot, msg.chat.id, "Đóng thủ công"); });
 bot.onText(/\/positions/, (msg) => { const trades = getOpenTrades(); if (trades.length === 0) { bot.sendMessage(msg.chat.id, "📭 Không có lệnh nào đang được theo dõi."); } else { const text = trades.map(t => `${t.symbol} | ${t.direction} | Entry: ${t.entry} | TP: ${t.tp} | SL: ${t.sl}`).join("\n"); bot.sendMessage(msg.chat.id, `📊 Lệnh đang theo dõi:\n${text}`); } });
-bot.onText(/\/scan_top_100/, async (msg) => { if (isScanning) return bot.sendMessage(msg.chat.id, "⚠️ Bot đang bận quét, vui lòng chờ."); bot.sendMessage(msg.chat.id, "🔎 Bắt đầu quét top 100 coin..."); const symbols = await getSymbols(100); if (symbols.length > 0) { const signalCount = await scanAll(symbols, 'manual_top_100', msg.chat.id); bot.sendMessage(msg.chat.id, `✅ Đã quét xong top 100! Tìm thấy ${signalCount} tín hiệu.`); } else { bot.sendMessage(msg.chat.id, "⚠️ Lỗi: Không thể lấy danh sách top 100."); } });
-bot.onText(/\/scan_all_coins/, async (msg) => { if (isScanning) return bot.sendMessage(msg.chat.id, "⚠️ Bot đang bận quét, vui lòng chờ."); bot.sendMessage(msg.chat.id, "⏳ Bắt đầu quét TOÀN BỘ coin..."); const symbols = await getSymbols(null); if (symbols.length > 0) { bot.sendMessage(msg.chat.id, `🔎 Tìm thấy ${symbols.length} coin. Bắt đầu quét...`); const signalCount = await scanAll(symbols, 'manual_full', msg.chat.id); bot.sendMessage(msg.chat.id, `✅ Đã quét xong ${symbols.length} coin! Tìm thấy ${signalCount} tín hiệu.`); } else { bot.sendMessage(msg.chat.id, "⚠️ Lỗi: Không thể lấy danh sách toàn bộ coin."); } });
+bot.onText(/🎯 Tín hiệu tốt nhất/, async (msg) => { await handleBestSignals(msg.chat.id); });
 bot.onText(/\/stats/, (msg) => { const statsMessage = getTradeStats(); bot.sendMessage(msg.chat.id, statsMessage, { parse_mode: "Markdown" }); });
 bot.onText(/\/theodoi/, async (msg) => { const trades = getOpenTrades(); if (trades.length === 0) { return bot.sendMessage(msg.chat.id, "📭 Bạn không có lệnh nào đang được theo dõi."); } bot.sendMessage(msg.chat.id, "🔍 Đang kiểm tra trạng thái các lệnh..."); let reportMessage = "📊 *BÁO CÁO TRẠNG THÁI LỆNH* 📊\n\n"; const pricePromises = trades.map(trade => getCurrentPrice(trade.symbol)); const currentPrices = await Promise.all(pricePromises); trades.forEach((trade, index) => { const currentPrice = currentPrices[index]; if (currentPrice === null) { reportMessage += `*${trade.symbol}* | ${trade.direction}\n- Không thể lấy giá hiện tại.\n\n`; return; } let pnlPercent = 0; if (trade.direction === 'LONG') { pnlPercent = ((currentPrice - trade.entry) / trade.entry) * 100; } else { pnlPercent = ((trade.entry - currentPrice) / trade.entry) * 100; } const statusIcon = pnlPercent >= 0 ? '🟢' : '🔴'; const formattedPnl = pnlPercent.toFixed(2); reportMessage += `${statusIcon} *${trade.symbol}* | ${trade.direction}\n`; reportMessage += `- Entry: \`${trade.entry}\`\n`; reportMessage += `- Giá hiện tại: \`${currentPrice}\`\n`; reportMessage += `- Lãi/Lỗ: *${formattedPnl}%*\n\n`; }); bot.sendMessage(msg.chat.id, reportMessage, { parse_mode: "Markdown" }); });
-bot.onText(/💡 Gợi ý LONG/, (msg) => { handleSuggestionRequest(msg.chat.id, "LONG"); });
-bot.onText(/💡 Gợi ý SHORT/, (msg) => { handleSuggestionRequest(msg.chat.id, "SHORT"); });
 bot.onText(/🔄 Tín hiệu đảo chiều/, (msg) => { handleReversalSignals(msg.chat.id); });
 bot.onText(/📊 Phân tích thị trường/, (msg) => { handleMarketAnalysis(msg.chat.id); });
 bot.onText(/⚠️ Cảnh báo rủi ro/, (msg) => { handleRiskWarnings(msg.chat.id); });
-bot.onText(/🎯 Tín hiệu MACD/, (msg) => { handleMACDSignals(msg.chat.id); });
+bot.onText(/\/daily_report/, (msg) => { handleDailyReport(msg.chat.id); });
 
-async function handleSuggestionRequest(chatId, direction) {
-    if (isScanning) { return bot.sendMessage(chatId, "⚠️ Bot đang bận quét, vui lòng thử lại sau."); }
-    bot.sendMessage(chatId, `🔍 Đang tìm các tín hiệu ${direction} tốt nhất trên thị trường Futures...`);
+// ==== HÀM TÍN HIỆU TỐT NHẤT (TỐI ƯU HÓA) ====
+async function handleBestSignals(chatId) {
+    if (isScanning) { 
+        return bot.sendMessage(chatId, "⚠️ Bot đang bận quét, vui lòng thử lại sau."); 
+    }
+    
+    bot.sendMessage(chatId, "🎯 Đang tìm các tín hiệu tốt nhất với độ chính xác cao...");
     isScanning = true;
+    
     try {
-        const allSymbols = await getSymbols(null);
-        if (!allSymbols || allSymbols.length === 0) { bot.sendMessage(chatId, "⚠️ Lỗi: Không thể lấy danh sách coin Futures."); return; }
-        let suggestions = [];
-        const totalSymbols = allSymbols.length;
-        for (let i = 0; i < totalSymbols; i++) {
-            const symbol = allSymbols[i];
-            console.log(`[SUGGEST] Đang quét (${i+1}/${totalSymbols}): ${symbol}`);
-            if (symbol.includes('USDC')) continue;
-            const signal = await getAllSignalsForSymbol(symbol);
-            if (signal.direction === direction) {
-                signal.symbol = symbol;
-                suggestions.push(signal);
-            }
-            await sleep(150);
+        // Chỉ quét top 50 coin có volume cao nhất để tăng tốc độ
+        const symbols = await getSymbols(50);
+        if (!symbols || symbols.length === 0) { 
+            bot.sendMessage(chatId, "⚠️ Lỗi: Không thể lấy danh sách coin."); 
+            return; 
         }
-        if (suggestions.length === 0) { bot.sendMessage(chatId, `✅ Đã quét xong. Không tìm thấy gợi ý ${direction} nào phù hợp.`); return; }
-        suggestions.sort((a, b) => b.adx - a.adx);
-        const topSuggestions = suggestions.slice(0, 5);
-        let reportMessage = `📈 *TOP 5 GỢI Ý ${direction} TIỀM NĂNG NHẤT*\n_(Sắp xếp theo Độ an toàn giảm dần)_\n\n`;
-        topSuggestions.forEach(sig => {
+        
+        let allSignals = [];
+        const batchSize = 10; // Xử lý theo batch để tăng tốc
+        
+        for (let i = 0; i < symbols.length; i += batchSize) {
+            const batch = symbols.slice(i, i + batchSize);
+            const batchPromises = batch.map(async (symbol) => {
+                if (symbol.includes('USDC')) return null;
+                try {
+                    const signal = await getAllSignalsForSymbol(symbol);
+                    if (signal.direction !== "NONE") {
+                        signal.symbol = symbol;
+                        // Tính điểm chất lượng tổng hợp
+                        signal.qualityScore = calculateQualityScore(signal);
+                        return signal;
+                    }
+                } catch (error) {
+                    console.error(`Lỗi quét ${symbol}:`, error.message);
+                }
+                return null;
+            });
+            
+            const batchResults = await Promise.all(batchPromises);
+            allSignals.push(...batchResults.filter(s => s !== null));
+            
+            // Cập nhật tiến trình
+            if (i + batchSize < symbols.length) {
+                bot.sendMessage(chatId, `⏳ Đã quét ${Math.min(i + batchSize, symbols.length)}/${symbols.length} coin...`);
+            }
+            
+            await sleep(100); // Giảm delay để tăng tốc
+        }
+        
+        if (allSignals.length === 0) { 
+            bot.sendMessage(chatId, "✅ Đã quét xong. Không tìm thấy tín hiệu nào phù hợp."); 
+            return; 
+        }
+        
+        // Sắp xếp theo điểm chất lượng và chỉ lấy top 8
+        allSignals.sort((a, b) => b.qualityScore - a.qualityScore);
+        const topSignals = allSignals.slice(0, 8);
+        
+        let reportMessage = "🎯 *TOP TÍN HIỆU TỐT NHẤT HÔM NAY*\n";
+        reportMessage += "_(Sắp xếp theo độ chính xác giảm dần)_\n\n";
+        
+        topSignals.forEach((sig, index) => {
+            const qualityIcon = sig.qualityScore > 80 ? '🔥' : sig.qualityScore > 60 ? '⚡' : '💡';
             const safetyLevel = sig.adx > 25 ? 'CAO' : (sig.adx >= 20 ? 'TRUNG BÌNH' : 'THẤP');
             const safetyIcon = sig.adx > 25 ? '✅' : (sig.adx >= 20 ? '⚠️' : '❌');
-            reportMessage += `*${sig.symbol}* - (Chiến lược: ${sig.strategy})\n`;
-            reportMessage += `${safetyIcon} Độ an toàn (ADX): *${sig.adx.toFixed(1)}* (${safetyLevel})\n`;
-            reportMessage += `Giá: ${sig.price.toFixed(4)}, TP: ${sig.tp.toFixed(4)}, SL: ${sig.sl.toFixed(4)}\n\n`;
+            
+            reportMessage += `${index + 1}. ${qualityIcon} *${sig.symbol}* | ${sig.direction}\n`;
+            reportMessage += `   📊 Chiến lược: ${sig.strategy}\n`;
+            reportMessage += `   ${safetyIcon} Độ an toàn: ${sig.adx.toFixed(1)} (${safetyLevel})\n`;
+            reportMessage += `   🎯 Điểm chất lượng: ${sig.qualityScore.toFixed(1)}/100\n`;
+            reportMessage += `   💰 Entry: ${sig.price.toFixed(5)}\n`;
+            reportMessage += `   🎯 TP: ${sig.tp.toFixed(5)} | 🛑 SL: ${sig.sl.toFixed(5)}\n\n`;
         });
+        
+        reportMessage += "💡 *Khuyến nghị:* Chỉ vào lệnh với điểm chất lượng > 70\n";
+        reportMessage += "🛡️ Luôn đặt stop loss và quản lý rủi ro cẩn thận";
+        
         bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
+        
     } catch(error) {
-        console.error("Lỗi khi tìm gợi ý:", error);
-        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong quá trình tìm kiếm gợi ý.");
+        console.error("Lỗi khi tìm tín hiệu tốt nhất:", error);
+        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong quá trình tìm kiếm tín hiệu.");
     } finally {
         isScanning = false;
     }
+}
+
+// Tính điểm chất lượng tổng hợp
+function calculateQualityScore(signal) {
+    let score = 0;
+    
+    // Điểm từ ADX (độ mạnh xu hướng)
+    score += Math.min(signal.adx * 2, 40);
+    
+    // Điểm từ chiến lược
+    const strategyScores = {
+        'SMC': 25,
+        'EMA_CROSS': 20,
+        'BB_BREAKOUT': 15,
+        'STOCH_RSI_REVERSAL': 20
+    };
+    score += strategyScores[signal.strategy] || 10;
+    
+    // Điểm từ Risk/Reward ratio
+    const risk = Math.abs(signal.price - signal.sl);
+    const reward = Math.abs(signal.tp - signal.price);
+    const rr = reward / risk;
+    score += Math.min(rr * 10, 25);
+    
+    // Điểm bonus cho các điều kiện đặc biệt
+    if (signal.adx > 30) score += 10; // Xu hướng rất mạnh
+    if (rr > 2) score += 5; // Risk/Reward tốt
+    
+    return Math.min(score, 100);
 }
 
 // --- Các hàm hệ thống ---
@@ -123,16 +194,84 @@ async function initialize() {
   if (!symbols || !symbols.length) { console.log("⚠️ [BOT] Không tìm thấy coin để quét định kỳ."); return; }
   console.log(`✅ [BOT] Sẽ quét định kỳ ${symbols.length} coin.`);
   bot.sendMessage(process.env.TELEGRAM_CHAT_ID, `🚀 Bot đã khởi động!`, menuOptions);
-  cron.schedule("*/5 * * * *", async () => {
+  // Quét tín hiệu mỗi 3 phút (tăng tần suất)
+  cron.schedule("*/3 * * * *", async () => {
     if (isScanning || !symbols || !symbols.length) { console.log("⚠️ [BOT] Bỏ qua quét định kỳ."); return; }
     await scanAll(symbols, "cron");
   });
-  console.log("⏳ [BOT] Đã cài cron job quét tín hiệu mới.");
+  
+  // Phân tích hàng ngày lúc 8:00 sáng
+  cron.schedule("0 8 * * *", async () => {
+    console.log("📊 [DAILY] Bắt đầu phân tích hàng ngày...");
+    await handleDailyReport(process.env.TELEGRAM_CHAT_ID);
+  });
+  
+  // Phân tích hàng tuần vào thứ 2 lúc 9:00 sáng
+  cron.schedule("0 9 * * 1", async () => {
+    console.log("📈 [WEEKLY] Bắt đầu phân tích hàng tuần...");
+    await handleWeeklyReport(process.env.TELEGRAM_CHAT_ID);
+  });
+  
+  console.log("⏳ [BOT] Đã cài cron job quét tín hiệu mới (3 phút/lần).");
+  console.log("📊 [BOT] Đã cài phân tích hàng ngày (8:00 sáng).");
+  console.log("📈 [BOT] Đã cài phân tích hàng tuần (Thứ 2, 9:00 sáng).");
 }
 initialize();
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 async function getSymbols(limit = null) { try { const res = await axios.get("https://www.okx.com/api/v5/public/instruments", { params: { instType: "SWAP" } }); let symbols = res.data.data.filter(t => t.state === 'live' && t.settleCcy === 'USDT').map(t => t.instId); if (limit) { const tickersRes = await axios.get("https://www.okx.com/api/v5/market/tickers", { params: { instType: "SWAP" } }); const volumeMap = new Map(tickersRes.data.data.map(t => [t.instId, Number(t.volCcy24h)])); symbols.sort((a, b) => (volumeMap.get(b) || 0) - (volumeMap.get(a) || 0)); return symbols.slice(0, limit); } return symbols; } catch (err) { console.error("❌ [BOT] Lỗi khi lấy danh sách coin Futures:", err.message); return []; } }
-async function scanAll(symbols, mode = "initial", chatId) { isScanning = true; let signalFoundCount = 0; const totalSymbols = symbols.length; const isManualScan = mode.startsWith('manual'); console.log(`🔎 [BOT] Bắt đầu quét (chế độ: ${mode})...`); try { for (let i = 0; i < totalSymbols; i++) { const sym = symbols[i]; console.log(`🔄 [BOT] (${i + 1}/${totalSymbols}) Đang quét: ${sym}...`); if (mode === 'manual_full' && (i + 1) % 100 === 0 && chatId) { bot.sendMessage(chatId, `⏳ Đã quét ${i + 1}/${totalSymbols} coin...`); } const hasSignal = await scanForNewSignal(sym, bot, process.env.TELEGRAM_CHAT_ID); if (hasSignal) signalFoundCount++; await sleep(150); } } catch(error) { console.error(`❌ Lỗi nghiêm trọng trong quá trình quét:`, error); if (chatId) bot.sendMessage(chatId, "❌ Lỗi trong quá trình quét, kiểm tra console log."); } finally { console.log(`✅ [BOT] Hoàn thành quét (chế độ: ${mode}).`); isScanning = false; if (isManualScan && signalFoundCount === 0 && chatId) { bot.sendMessage(chatId, "✅ Đã quét xong. Không tìm thấy tín hiệu mới nào phù hợp."); } } return signalFoundCount; }
+async function scanAll(symbols, mode = "initial", chatId) { 
+    isScanning = true; 
+    let signalFoundCount = 0; 
+    const totalSymbols = symbols.length; 
+    const isManualScan = mode.startsWith('manual'); 
+    console.log(`🔎 [BOT] Bắt đầu quét (chế độ: ${mode})...`); 
+    
+    try { 
+        // Tối ưu hóa: xử lý theo batch để tăng tốc độ
+        const batchSize = mode === "cron" ? 5 : 10; // Cron job nhỏ hơn để không làm chậm hệ thống
+        const delay = mode === "cron" ? 50 : 100; // Giảm delay cho cron job
+        
+        for (let i = 0; i < totalSymbols; i += batchSize) {
+            const batch = symbols.slice(i, i + batchSize);
+            
+            // Xử lý song song trong batch
+            const batchPromises = batch.map(async (sym) => {
+                try {
+                    const hasSignal = await scanForNewSignal(sym, bot, process.env.TELEGRAM_CHAT_ID);
+                    return hasSignal ? 1 : 0;
+                } catch (error) {
+                    console.error(`❌ Lỗi quét ${sym}:`, error.message);
+                    return 0;
+                }
+            });
+            
+            const batchResults = await Promise.all(batchPromises);
+            signalFoundCount += batchResults.reduce((sum, count) => sum + count, 0);
+            
+            // Log tiến trình
+            const processed = Math.min(i + batchSize, totalSymbols);
+            console.log(`🔄 [BOT] (${processed}/${totalSymbols}) Đã xử lý batch...`);
+            
+            // Cập nhật tiến trình cho manual scan
+            if (isManualScan && processed % 50 === 0 && chatId) {
+                bot.sendMessage(chatId, `⏳ Đã quét ${processed}/${totalSymbols} coin...`);
+            }
+            
+            await sleep(delay);
+        }
+        
+    } catch(error) { 
+        console.error(`❌ Lỗi nghiêm trọng trong quá trình quét:`, error); 
+        if (chatId) bot.sendMessage(chatId, "❌ Lỗi trong quá trình quét, kiểm tra console log."); 
+    } finally { 
+        console.log(`✅ [BOT] Hoàn thành quét (chế độ: ${mode}). Tìm thấy ${signalFoundCount} tín hiệu.`); 
+        isScanning = false; 
+        if (isManualScan && signalFoundCount === 0 && chatId) { 
+            bot.sendMessage(chatId, "✅ Đã quét xong. Không tìm thấy tín hiệu mới nào phù hợp."); 
+        } 
+    } 
+    return signalFoundCount; 
+}
 
 // ==== CÁC HÀM XỬ LÝ TÍN HIỆU ĐẢO CHIỀU ====
 
@@ -379,89 +518,235 @@ async function handleRiskWarnings(chatId) {
     }
 }
 
-async function handleMACDSignals(chatId) {
+// ==== PHÂN TÍCH HÀNG NGÀY ====
+async function handleDailyReport(chatId) {
     if (isScanning) {
-        return bot.sendMessage(chatId, "⚠️ Bot đang bận quét, vui lòng thử lại sau.");
+        return bot.sendMessage(chatId, "⚠️ Bot đang bận, sẽ gửi báo cáo sau.");
     }
     
-    bot.sendMessage(chatId, "🎯 Đang tìm kiếm các tín hiệu MACD...");
+    bot.sendMessage(chatId, "📊 Đang tạo báo cáo phân tích hàng ngày...");
     isScanning = true;
     
     try {
-        const symbols = await getSymbols(40);
+        const symbols = await getSymbols(30); // Top 30 coin
         if (!symbols || symbols.length === 0) {
             bot.sendMessage(chatId, "⚠️ Lỗi: Không thể lấy danh sách coin.");
             return;
         }
         
-        let macdSignals = [];
+        let bullishCount = 0, bearishCount = 0, neutralCount = 0;
+        let highQualitySignals = [];
+        let marketTrend = "NEUTRAL";
         
-        for (let i = 0; i < Math.min(symbols.length, 25); i++) {
+        // Phân tích xu hướng tổng thể
+        for (let i = 0; i < Math.min(symbols.length, 20); i++) {
             const symbol = symbols[i];
-            console.log(`[MACD] Đang kiểm tra (${i+1}/25): ${symbol}`);
-            
             try {
-                const candles = await getCandles(symbol, "1H", 100);
-                if (!candles || candles.length < 50) continue;
-                
-                const macd = calcMACD(candles);
-                if (macd) {
-                    const currentPrice = await getCurrentPrice(symbol);
-                    if (currentPrice) {
-                        // Tín hiệu MACD bullish: MACD cắt lên Signal
-                        const isBullish = macd.prevMacd <= macd.prevSignal && macd.macd > macd.signal;
-                        // Tín hiệu MACD bearish: MACD cắt xuống Signal
-                        const isBearish = macd.prevMacd >= macd.prevSignal && macd.macd < macd.signal;
-                        
-                        if (isBullish || isBearish) {
-                            macdSignals.push({
-                                symbol,
-                                signal: isBullish ? "BULLISH" : "BEARISH",
-                                macd: macd.macd,
-                                signal_line: macd.signal,
-                                histogram: macd.histogram,
-                                price: currentPrice
-                            });
+                const analysis = await getDailyMarketAnalysis(symbol);
+                if (analysis && analysis.recommendation) {
+                    const { direction } = analysis.recommendation;
+                    if (direction === "LONG") bullishCount++;
+                    else if (direction === "SHORT") bearishCount++;
+                    else neutralCount++;
+                    
+                    // Thu thập tín hiệu chất lượng cao
+                    const signal = await getAllSignalsForSymbol(symbol);
+                    if (signal.direction !== "NONE") {
+                        signal.symbol = symbol;
+                        signal.qualityScore = calculateQualityScore(signal);
+                        if (signal.qualityScore > 70) {
+                            highQualitySignals.push(signal);
                         }
                     }
                 }
             } catch (error) {
-                console.error(`Lỗi kiểm tra MACD cho ${symbol}:`, error.message);
+                console.error(`Lỗi phân tích ${symbol}:`, error.message);
             }
-            
             await sleep(100);
         }
         
-        if (macdSignals.length === 0) {
-            bot.sendMessage(chatId, "✅ Không tìm thấy tín hiệu MACD nào.");
-            return;
+        // Xác định xu hướng thị trường
+        const total = bullishCount + bearishCount + neutralCount;
+        if (total > 0) {
+            const bullishPercent = (bullishCount / total) * 100;
+            const bearishPercent = (bearishCount / total) * 100;
+            
+            if (bullishPercent > 60) marketTrend = "BULLISH";
+            else if (bearishPercent > 60) marketTrend = "BEARISH";
         }
         
-        // Sắp xếp theo histogram (độ mạnh tín hiệu)
-        macdSignals.sort((a, b) => Math.abs(b.histogram) - Math.abs(a.histogram));
+        // Sắp xếp tín hiệu chất lượng cao
+        highQualitySignals.sort((a, b) => b.qualityScore - a.qualityScore);
         
-        let message = "🎯 *TÍN HIỆU MACD MỚI NHẤT*\n\n";
+        const today = new Date().toLocaleDateString('vi-VN');
+        let reportMessage = `📊 *BÁO CÁO PHÂN TÍCH HÀNG NGÀY*\n`;
+        reportMessage += `📅 Ngày: ${today}\n\n`;
         
-        macdSignals.slice(0, 8).forEach((signal, index) => {
-            const signalIcon = signal.signal === "BULLISH" ? "📈" : "📉";
-            const strengthIcon = Math.abs(signal.histogram) > 0.01 ? "🔥" : "⚡";
-            
-            message += `${index + 1}. ${signalIcon} *${signal.symbol}*\n`;
-            message += `   ${strengthIcon} Tín hiệu: ${signal.signal}\n`;
-            message += `   📊 MACD: ${signal.macd.toFixed(6)}\n`;
-            message += `   📈 Signal: ${signal.signal_line.toFixed(6)}\n`;
-            message += `   📊 Histogram: ${signal.histogram.toFixed(6)}\n`;
-            message += `   💰 Giá: ${signal.price.toFixed(5)}\n\n`;
-        });
+        // Xu hướng thị trường
+        const trendIcon = marketTrend === "BULLISH" ? "📈" : marketTrend === "BEARISH" ? "📉" : "⚖️";
+        reportMessage += `${trendIcon} *XU HƯỚNG THỊ TRƯỜNG: ${marketTrend}*\n`;
+        reportMessage += `📈 Tích cực: ${bullishCount} coin\n`;
+        reportMessage += `📉 Tiêu cực: ${bearishCount} coin\n`;
+        reportMessage += `⚖️ Trung tính: ${neutralCount} coin\n\n`;
         
-        message += "💡 *Lưu ý:* Tín hiệu MACD mạnh nhất khi histogram có giá trị tuyệt đối lớn.\n";
-        message += "🎯 Nên kết hợp với các chỉ báo khác để xác nhận tín hiệu.";
+        // Tín hiệu chất lượng cao
+        if (highQualitySignals.length > 0) {
+            reportMessage += `🎯 *TÍN HIỆU CHẤT LƯỢNG CAO HÔM NAY*\n`;
+            highQualitySignals.slice(0, 5).forEach((sig, index) => {
+                const qualityIcon = sig.qualityScore > 85 ? '🔥' : '⚡';
+                reportMessage += `${index + 1}. ${qualityIcon} *${sig.symbol}* | ${sig.direction}\n`;
+                reportMessage += `   📊 Chiến lược: ${sig.strategy}\n`;
+                reportMessage += `   🎯 Điểm chất lượng: ${sig.qualityScore.toFixed(1)}/100\n`;
+                reportMessage += `   💰 Entry: ${sig.price.toFixed(5)}\n\n`;
+            });
+        } else {
+            reportMessage += `⚠️ *Không có tín hiệu chất lượng cao hôm nay*\n`;
+            reportMessage += `💡 Khuyến nghị: Chờ đợi cơ hội tốt hơn\n\n`;
+        }
         
-        bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+        // Khuyến nghị giao dịch
+        reportMessage += `💡 *KHUYẾN NGHỊ GIAO DỊCH:*\n`;
+        if (marketTrend === "BULLISH") {
+            reportMessage += `✅ Ưu tiên các lệnh LONG\n`;
+            reportMessage += `🎯 Tập trung vào coin có xu hướng mạnh\n`;
+        } else if (marketTrend === "BEARISH") {
+            reportMessage += `✅ Ưu tiên các lệnh SHORT\n`;
+            reportMessage += `🛡️ Cẩn thận với các lệnh LONG\n`;
+        } else {
+            reportMessage += `⚠️ Thị trường trung tính, nên thận trọng\n`;
+            reportMessage += `🎯 Chỉ vào lệnh khi có tín hiệu rõ ràng\n`;
+        }
+        
+        reportMessage += `\n🕐 Báo cáo tiếp theo: Ngày mai lúc 8:00 sáng`;
+        
+        bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
         
     } catch (error) {
-        console.error("Lỗi khi tìm tín hiệu MACD:", error);
-        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong quá trình tìm kiếm tín hiệu MACD.");
+        console.error("Lỗi khi tạo báo cáo hàng ngày:", error);
+        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi khi tạo báo cáo hàng ngày.");
+    } finally {
+        isScanning = false;
+    }
+}
+
+// ==== PHÂN TÍCH HÀNG TUẦN ====
+async function handleWeeklyReport(chatId) {
+    if (isScanning) {
+        return bot.sendMessage(chatId, "⚠️ Bot đang bận, sẽ gửi báo cáo sau.");
+    }
+    
+    bot.sendMessage(chatId, "📈 Đang tạo báo cáo phân tích hàng tuần...");
+    isScanning = true;
+    
+    try {
+        const symbols = await getSymbols(20); // Top 20 coin cho phân tích tuần
+        
+        let weeklyTrends = [];
+        let marketSummary = {
+            bullish: 0,
+            bearish: 0,
+            neutral: 0,
+            highRisk: 0,
+            lowRisk: 0
+        };
+        
+        for (let i = 0; i < symbols.length; i++) {
+            const symbol = symbols[i];
+            try {
+                // Phân tích xu hướng tuần
+                const candles = await getCandles(symbol, "1D", 30);
+                if (!candles || candles.length < 20) continue;
+                
+                const analysis = await getDailyMarketAnalysis(symbol);
+                if (analysis) {
+                    const { recommendation, risk } = analysis;
+                    if (recommendation) {
+                        if (recommendation.direction === "LONG") marketSummary.bullish++;
+                        else if (recommendation.direction === "SHORT") marketSummary.bearish++;
+                        else marketSummary.neutral++;
+                    }
+                    
+                    if (risk && risk.riskLevel === "HIGH") marketSummary.highRisk++;
+                    else if (risk && risk.riskLevel === "LOW") marketSummary.lowRisk++;
+                    
+                    weeklyTrends.push({
+                        symbol,
+                        trend: recommendation?.direction || "NEUTRAL",
+                        confidence: recommendation?.confidence || 0,
+                        risk: risk?.riskLevel || "MEDIUM"
+                    });
+                }
+            } catch (error) {
+                console.error(`Lỗi phân tích tuần cho ${symbol}:`, error.message);
+            }
+            await sleep(150);
+        }
+        
+        const weekStart = new Date();
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1); // Thứ 2
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 6); // Chủ nhật
+        
+        let reportMessage = `📈 *BÁO CÁO PHÂN TÍCH HÀNG TUẦN*\n`;
+        reportMessage += `📅 Tuần: ${weekStart.toLocaleDateString('vi-VN')} - ${weekEnd.toLocaleDateString('vi-VN')}\n\n`;
+        
+        // Tổng quan thị trường
+        const total = marketSummary.bullish + marketSummary.bearish + marketSummary.neutral;
+        const bullishPercent = total > 0 ? (marketSummary.bullish / total * 100).toFixed(1) : 0;
+        const bearishPercent = total > 0 ? (marketSummary.bearish / total * 100).toFixed(1) : 0;
+        
+        reportMessage += `📊 *TỔNG QUAN THỊ TRƯỜNG TUẦN NÀY:*\n`;
+        reportMessage += `📈 Xu hướng tích cực: ${marketSummary.bullish} coin (${bullishPercent}%)\n`;
+        reportMessage += `📉 Xu hướng tiêu cực: ${marketSummary.bearish} coin (${bearishPercent}%)\n`;
+        reportMessage += `⚖️ Trung tính: ${marketSummary.neutral} coin\n\n`;
+        
+        reportMessage += `⚠️ *PHÂN TÍCH RỦI RO:*\n`;
+        reportMessage += `🔴 Rủi ro cao: ${marketSummary.highRisk} coin\n`;
+        reportMessage += `🟢 Rủi ro thấp: ${marketSummary.lowRisk} coin\n\n`;
+        
+        // Top coin theo xu hướng
+        const bullishCoins = weeklyTrends.filter(t => t.trend === "LONG").sort((a, b) => b.confidence - a.confidence);
+        const bearishCoins = weeklyTrends.filter(t => t.trend === "SHORT").sort((a, b) => b.confidence - a.confidence);
+        
+        if (bullishCoins.length > 0) {
+            reportMessage += `📈 *TOP COIN XU HƯỚNG TÍCH CỰC:*\n`;
+            bullishCoins.slice(0, 3).forEach((coin, index) => {
+                reportMessage += `${index + 1}. *${coin.symbol}* - Độ tin cậy: ${coin.confidence.toFixed(1)}%\n`;
+            });
+            reportMessage += `\n`;
+        }
+        
+        if (bearishCoins.length > 0) {
+            reportMessage += `📉 *TOP COIN XU HƯỚNG TIÊU CỰC:*\n`;
+            bearishCoins.slice(0, 3).forEach((coin, index) => {
+                reportMessage += `${index + 1}. *${coin.symbol}* - Độ tin cậy: ${coin.confidence.toFixed(1)}%\n`;
+            });
+            reportMessage += `\n`;
+        }
+        
+        // Khuyến nghị tuần tới
+        reportMessage += `💡 *KHUYẾN NGHỊ CHO TUẦN TỚI:*\n`;
+        if (bullishPercent > 60) {
+            reportMessage += `✅ Thị trường có xu hướng tích cực\n`;
+            reportMessage += `🎯 Tập trung vào các lệnh LONG\n`;
+            reportMessage += `📈 Theo dõi các coin có xu hướng mạnh\n`;
+        } else if (bearishPercent > 60) {
+            reportMessage += `⚠️ Thị trường có xu hướng tiêu cực\n`;
+            reportMessage += `🎯 Cân nhắc các lệnh SHORT\n`;
+            reportMessage += `🛡️ Cẩn thận với các lệnh LONG\n`;
+        } else {
+            reportMessage += `⚖️ Thị trường ở trạng thái trung tính\n`;
+            reportMessage += `🎯 Chờ đợi tín hiệu rõ ràng\n`;
+            reportMessage += `📊 Theo dõi các breakout quan trọng\n`;
+        }
+        
+        reportMessage += `\n📅 Báo cáo tiếp theo: Thứ 2 tuần sau lúc 9:00 sáng`;
+        
+        bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
+        
+    } catch (error) {
+        console.error("Lỗi khi tạo báo cáo hàng tuần:", error);
+        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi khi tạo báo cáo hàng tuần.");
     } finally {
         isScanning = false;
     }
