@@ -539,42 +539,6 @@ function findOrderBlocks(candles) {
     return orderBlocks.slice(-5); // Chỉ lấy 5 OB gần nhất
 }
 
-/**
- * Tìm Swing Points
- */
-function findSwingPoints(candles) {
-    if (candles.length < 10) return [];
-    
-    const swingPoints = [];
-    
-    for (let i = 5; i < candles.length - 5; i++) {
-        const current = candles[i];
-        const left = candles.slice(i - 5, i);
-        const right = candles.slice(i + 1, i + 6);
-        
-        // Swing High
-        if (left.every(c => c.high <= current.high) && 
-            right.every(c => c.high <= current.high)) {
-            swingPoints.push({
-                type: "high",
-                price: current.high,
-                index: i
-            });
-        }
-        
-        // Swing Low
-        if (left.every(c => c.low >= current.low) && 
-            right.every(c => c.low >= current.low)) {
-            swingPoints.push({
-                type: "low",
-                price: current.low,
-                index: i
-            });
-        }
-    }
-    
-    return swingPoints.slice(-10); // Chỉ lấy 10 SP gần nhất
-}
 
 /* ============== EXPORT FUNCTIONS ============== */
 
