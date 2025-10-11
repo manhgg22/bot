@@ -2,7 +2,7 @@
 import { getCandles, getCurrentPrice } from "./okx.js";
 import { findOrderBlock, detectBOS, findSwingPoints } from "./smc.js";
 import { getOpenTrades, closeTrade } from "./tradeManager.js";
-import { filterHighQualitySignals, generateSignalReport } from "./signalFilter.js";
+import { filterHighQualitySignals, generateSignalReport, analyzeRiskAndExitPoints, generateRiskReport } from "./signalFilter.js";
 
 /* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO ============== */
 
@@ -406,7 +406,7 @@ export async function scanForNewSignal(symbol, bot, chatId) {
         const entryCommand = `\`/${commandDirection} ${symbol} ${signal.price} ${signal.sl}\``;
         
         // Tạo báo cáo chi tiết nếu có điểm số
-        const detailedReport = signal.score ? generateSignalReport(signal) : '';
+        const detailedReport = signal.score ? await generateSignalReport(signal) : '';
         
         const message = `
 🔔 *[TÍN HIỆU CHẤT LƯỢNG CAO - ${signal.strategy}]*
@@ -429,5 +429,44 @@ ${detailedReport ? detailedReport : ''}
   } catch (err) {
     console.error(`❌ Lỗi khi quét tín hiệu mới cho ${symbol}:`, err.message);
     return false;
+  }
+}
+
+/**
+ * Hàm cảnh báo rủi ro cho các lệnh đang mở
+ */
+export async function checkRiskAndWarn(bot, chatId) {
+  try {
+    const openTrades = getOpenTrades();
+    if (openTrades.length === 0) return;
+
+    for (const trade of openTrades) {
+      const riskAnalysis = await analyzeRiskAndExitPoints(trade.symbol, trade.direction, trade.entry, trade.sl);
+      
+      if (riskAnalysis.riskLevel === "HIGH" || riskAnalysis.exitRecommendation === "EXIT_NOW") {
+        const riskReport = generateRiskReport(riskAnalysis);
+        const warningMessage = `
+🚨 *CẢNH BÁO RỦI RO CAO - ${trade.symbol}*
+
+${riskReport}
+
+💡 *Khuyến nghị:* Thoát lệnh ngay để tránh SL
+Để đóng lệnh: \`/close ${trade.symbol}\`
+`;
+        bot.sendMessage(chatId, warningMessage, { parse_mode: "Markdown" });
+      } else if (riskAnalysis.riskLevel === "MEDIUM" || riskAnalysis.exitRecommendation === "CONSIDER_EXIT") {
+        const riskReport = generateRiskReport(riskAnalysis);
+        const warningMessage = `
+⚠️ *CẢNH BÁO RỦI RO TRUNG BÌNH - ${trade.symbol}*
+
+${riskReport}
+
+💡 *Khuyến nghị:* Cân nhắc thoát lệnh hoặc theo dõi chặt chẽ
+`;
+        bot.sendMessage(chatId, warningMessage, { parse_mode: "Markdown" });
+      }
+    }
+  } catch (error) {
+    console.error("Lỗi khi kiểm tra rủi ro:", error);
   }
 }

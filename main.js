@@ -4,13 +4,10 @@ import dotenv from "dotenv";
 import TelegramBot from "node-telegram-bot-api";
 import axios from "axios";
 import cron from "node-cron";
-import { scanForNewSignal, monitorOpenTrades, getAllSignalsForSymbol } from "./indicators.js";
+import { scanForNewSignal, monitorOpenTrades, getAllSignalsForSymbol, checkRiskAndWarn } from "./indicators.js";
 import { filterHighQualitySignals } from "./signalFilter.js";
 import { addTrade, closeTrade, getOpenTrades, getTradeStats } from "./tradeManager.js";
-import { getCurrentPrice, getCandles } from "./okx.js";
-import { detectReversalSignals, getDailyMarketAnalysis, detectCrashRisk, calcMACD } from "./advancedIndicators.js";
-import { getDailyAnalysisReport } from "./dailyAnalysis.js";
-import { scanForPremiumSignals, scanAllCoinsForOpportunities, analyzeSpecificCoin } from "./premiumSignals.js";
+import { getCurrentPrice } from "./okx.js";
 
 dotenv.config();
 
@@ -44,12 +41,9 @@ const menuOptions = {
   reply_markup: {
     keyboard: [
       ["/status", "/positions", "/stats"],
-      ["🎯 Tín hiệu tốt nhất", "💎 Tín hiệu Premium"],
-      ["🌍 Quét hết coin", "📊 Phân tích thị trường"],
-      ["⚠️ Cảnh báo rủi ro", "🔄 Tín hiệu đảo chiều"],
-      ["🌅 Phân tích đầu ngày", "/theodoi", "/daily_report"],
-      ["💡 Gợi ý LONG", "💡 Gợi ý SHORT", "/quality"],
-      ["/indicators"]
+      ["/scan_top_100", "/scan_all_coins"],
+      ["💡 Gợi ý LONG", "💡 Gợi ý SHORT"],
+      ["/theodoi", "/quality", "/risk_check"],
     ],
     resize_keyboard: true,
   },
@@ -156,13 +150,19 @@ bot.onText(/\/quality_info/, (msg) => {
     bot.sendMessage(msg.chat.id, infoMessage, { parse_mode: "Markdown" });
 });
 
+bot.onText(/\/risk_check/, async (msg) => {
+    const openTrades = getOpenTrades();
+    if (openTrades.length === 0) {
+        bot.sendMessage(msg.chat.id, "📭 Bạn không có lệnh nào đang được theo dõi để kiểm tra rủi ro.");
+        return;
+    }
+    
+    bot.sendMessage(msg.chat.id, "🔍 Đang kiểm tra rủi ro cho các lệnh đang mở...");
+    await checkRiskAndWarn(bot, msg.chat.id);
+});
+
 bot.onText(/💡 Gợi ý LONG/, (msg) => { handleSuggestionRequest(msg.chat.id, "LONG"); });
 bot.onText(/💡 Gợi ý SHORT/, (msg) => { handleSuggestionRequest(msg.chat.id, "SHORT"); });
-
-bot.onText(/🔄 Tín hiệu đảo chiều/, (msg) => { handleReversalSignals(msg.chat.id); });
-bot.onText(/📊 Phân tích thị trường/, (msg) => { handleMarketAnalysis(msg.chat.id); });
-bot.onText(/⚠️ Cảnh báo rủi ro/, (msg) => { handleRiskWarnings(msg.chat.id); });
-bot.onText(/🌅 Phân tích đầu ngày/, (msg) => { handleDailyAnalysis(msg.chat.id); });
 bot.onText(/\/daily_report/, (msg) => { handleDailyReport(msg.chat.id); });
 bot.onText(/\/indicators/, (msg) => { handleIndicatorsInfo(msg.chat.id); });
 
@@ -449,15 +449,24 @@ function handleIndicatorsInfo(chatId) {
 let symbols;
 async function initialize() {
   console.log("🚀 [BOT] Khởi động các tác vụ nền...");
+  
+  // Monitoring real-time với cảnh báo rủi ro
   const REALTIME_MONITOR_INTERVAL = 30 * 1000;
   setInterval(() => {
     monitorOpenTrades(bot, process.env.TELEGRAM_CHAT_ID);
   }, REALTIME_MONITOR_INTERVAL);
-  console.log(`✅ [BOT] Luồng giám sát Real-time đã được kích hoạt.`);
+  
+  // Kiểm tra rủi ro mỗi 2 phút
+  const RISK_CHECK_INTERVAL = 2 * 60 * 1000;
+  setInterval(async () => {
+    await checkRiskAndWarn(bot, process.env.TELEGRAM_CHAT_ID);
+  }, RISK_CHECK_INTERVAL);
+  
+  console.log(`✅ [BOT] Luồng giám sát Real-time và cảnh báo rủi ro đã được kích hoạt.`);
   symbols = await getSymbols(100);
   if (!symbols || !symbols.length) { console.log("⚠️ [BOT] Không tìm thấy coin để quét định kỳ."); return; }
   console.log(`✅ [BOT] Sẽ quét định kỳ ${symbols.length} coin.`);
-  bot.sendMessage(process.env.TELEGRAM_CHAT_ID, `🚀 Bot đã khởi động!`, menuOptions);
+  bot.sendMessage(process.env.TELEGRAM_CHAT_ID, `🚀 Bot đã khởi động với hệ thống cảnh báo rủi ro!`, menuOptions);
   // Quét tín hiệu mỗi 3 phút (tăng tần suất)
   cron.schedule("*/3 * * * *", async () => {
     if (isScanning || !symbols || !symbols.length) { console.log("⚠️ [BOT] Bỏ qua quét định kỳ."); return; }

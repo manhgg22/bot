@@ -1,9 +1,9 @@
-// advancedIndicators.js - Chỉ báo kỹ thuật nâng cao
+// advancedIndicators.js - Hệ thống chỉ báo nâng cao và cảnh báo rủi ro
 import { getCandles, getCurrentPrice } from "./okx.js";
 import { calcEMA, calcRSI, calcATR, calcBollingerBands, calcAvgVolume } from "./indicators.js";
 
 /**
- * Tính toán MACD (Moving Average Convergence Divergence)
+ * Tính toán MACD với tín hiệu mạnh mẽ
  */
 export function calcMACD(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
     if (candles.length < slowPeriod + signalPeriod) return null;
@@ -24,18 +24,24 @@ export function calcMACD(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod
         histogram.push(macdLine[i] - signalLine[i - signalPeriod + 1]);
     }
     
+    const currentMacd = macdLine.at(-1);
+    const currentSignal = signalLine.at(-1);
+    const currentHistogram = histogram.at(-1);
+    const prevHistogram = histogram.at(-2);
+    
     return {
-        macd: macdLine.at(-1),
-        signal: signalLine.at(-1),
-        histogram: histogram.at(-1),
-        prevMacd: macdLine.at(-2),
-        prevSignal: signalLine.at(-2),
-        prevHistogram: histogram.at(-2)
+        macd: currentMacd,
+        signal: currentSignal,
+        histogram: currentHistogram,
+        prevHistogram: prevHistogram,
+        bullish: currentMacd > currentSignal && currentHistogram > prevHistogram,
+        bearish: currentMacd < currentSignal && currentHistogram < prevHistogram,
+        strength: Math.abs(currentHistogram)
     };
 }
 
 /**
- * Tính toán Stochastic Oscillator
+ * Stochastic Oscillator với tín hiệu chính xác
  */
 export function calcStochastic(candles, kPeriod = 14, dPeriod = 3) {
     if (candles.length < kPeriod + dPeriod) return null;
@@ -57,16 +63,25 @@ export function calcStochastic(candles, kPeriod = 14, dPeriod = 3) {
         dValues.push(dSlice.reduce((a, b) => a + b, 0) / dPeriod);
     }
     
+    const currentK = kValues.at(-1);
+    const currentD = dValues.at(-1);
+    const prevK = kValues.at(-2);
+    const prevD = dValues.at(-2);
+    
     return {
-        k: kValues.at(-1),
-        d: dValues.at(-1),
-        prevK: kValues.at(-2),
-        prevD: dValues.at(-2)
+        k: currentK,
+        d: currentD,
+        prevK: prevK,
+        prevD: prevD,
+        oversold: currentK < 20,
+        overbought: currentK > 80,
+        bullishCrossover: currentK > currentD && prevK <= prevD,
+        bearishCrossover: currentK < currentD && prevK >= prevD
     };
 }
 
 /**
- * Tính toán Williams %R
+ * Williams %R với tín hiệu momentum
  */
 export function calcWilliamsR(candles, period = 14) {
     if (candles.length < period) return null;
@@ -80,13 +95,15 @@ export function calcWilliamsR(candles, period = 14) {
     
     return {
         value: williamsR,
-        prevValue: period < candles.length ? 
-            ((highest - candles.at(-2).close) / (highest - lowest)) * -100 : williamsR
+        oversold: williamsR < -80,
+        overbought: williamsR > -20,
+        bullish: williamsR > -80 && williamsR < -50,
+        bearish: williamsR < -50 && williamsR > -20
     };
 }
 
 /**
- * Tính toán Money Flow Index (MFI)
+ * Money Flow Index với xác nhận volume
  */
 export function calcMFI(candles, period = 14) {
     if (candles.length < period + 1) return null;
@@ -121,18 +138,14 @@ export function calcMFI(candles, period = 14) {
     
     return {
         value: mfi,
-        prevValue: moneyFlows.length >= period + 1 ? 
-            (() => {
-                const prevFlows = moneyFlows.slice(-period - 1, -1);
-                const prevPositive = prevFlows.reduce((sum, flow) => sum + flow.positive, 0);
-                const prevNegative = prevFlows.reduce((sum, flow) => sum + flow.negative, 0);
-                return prevNegative === 0 ? 100 : 100 - (100 / (1 + prevPositive / prevNegative));
-            })() : mfi
+        bullish: mfi < 20, // Oversold
+        bearish: mfi > 80, // Overbought
+        strength: Math.abs(mfi - 50) / 50
     };
 }
 
 /**
- * Tính toán Commodity Channel Index (CCI)
+ * Commodity Channel Index với breakout detection
  */
 export function calcCCI(candles, period = 20) {
     if (candles.length < period) return null;
@@ -147,18 +160,16 @@ export function calcCCI(candles, period = 20) {
     
     return {
         value: cci,
-        prevValue: typicalPrices.length >= period + 1 ? 
-            (() => {
-                const prevPrices = typicalPrices.slice(-period - 1, -1);
-                const prevSma = prevPrices.reduce((sum, price) => sum + price, 0) / period;
-                const prevMeanDev = prevPrices.reduce((sum, price) => sum + Math.abs(price - prevSma), 0) / period;
-                return prevMeanDev === 0 ? 0 : (typicalPrices.at(-2) - prevSma) / (0.015 * prevMeanDev);
-            })() : cci
+        bullish: cci > 100, // Bullish breakout
+        bearish: cci < -100, // Bearish breakout
+        overbought: cci > 200,
+        oversold: cci < -200,
+        strength: Math.abs(cci) / 100
     };
 }
 
 /**
- * Tính toán Parabolic SAR
+ * Parabolic SAR với trend confirmation
  */
 export function calcParabolicSAR(candles, acceleration = 0.02, maximum = 0.2) {
     if (candles.length < 2) return null;
@@ -200,19 +211,19 @@ export function calcParabolicSAR(candles, acceleration = 0.02, maximum = 0.2) {
         }
     }
     
+    const currentPrice = candles.at(-1).close;
+    
     return {
         value: sar,
         trend: trend,
-        prevValue: candles.length >= 3 ? 
-            (() => {
-                // Simplified calculation for previous value
-                return trend === 1 ? Math.min(sar, candles.at(-2).low) : Math.max(sar, candles.at(-2).high);
-            })() : sar
+        bullish: trend === 1 && currentPrice > sar,
+        bearish: trend === -1 && currentPrice < sar,
+        distance: Math.abs(currentPrice - sar) / currentPrice
     };
 }
 
 /**
- * Tính toán Ichimoku Cloud (simplified)
+ * Ichimoku Cloud với cloud analysis
  */
 export function calcIchimoku(candles, conversionPeriod = 9, basePeriod = 26, leadingSpanBPeriod = 52) {
     if (candles.length < leadingSpanBPeriod) return null;
@@ -239,33 +250,37 @@ export function calcIchimoku(candles, conversionPeriod = 9, basePeriod = 26, lea
     const senkouBLow = Math.min(...lows.slice(-leadingSpanBPeriod));
     const senkouB = (senkouBHigh + senkouBLow) / 2;
     
-    // Chikou Span (Lagging Span)
-    const chikou = closes.at(-1);
+    const currentPrice = closes.at(-1);
+    const cloudTop = Math.max(senkouA, senkouB);
+    const cloudBottom = Math.min(senkouA, senkouB);
     
     return {
         tenkan,
         kijun,
         senkouA,
         senkouB,
-        chikou,
-        cloudTop: Math.max(senkouA, senkouB),
-        cloudBottom: Math.min(senkouA, senkouB),
-        currentPrice: closes.at(-1),
-        isAboveCloud: closes.at(-1) > Math.max(senkouA, senkouB),
-        isBelowCloud: closes.at(-1) < Math.min(senkouA, senkouB)
+        cloudTop,
+        cloudBottom,
+        currentPrice,
+        isAboveCloud: currentPrice > cloudTop,
+        isBelowCloud: currentPrice < cloudBottom,
+        isInCloud: currentPrice >= cloudBottom && currentPrice <= cloudTop,
+        bullish: currentPrice > cloudTop && tenkan > kijun,
+        bearish: currentPrice < cloudBottom && tenkan < kijun
     };
 }
 
 /**
- * Phân tích tất cả chỉ báo nâng cao cho một symbol
+ * Hệ thống phân tích chỉ báo nâng cao với điểm số (NÂNG CẤP với 10 chỉ báo mới)
  */
 export async function analyzeAdvancedIndicators(symbol, direction) {
     try {
         const candles = await getCandles(symbol, "1H", 100);
         if (!candles || candles.length < 50) {
-            return { summary: {}, details: {} };
+            return { score: 0, signals: {}, details: {} };
         }
         
+        // Tính toán các chỉ báo nâng cao cũ (7 chỉ báo)
         const macd = calcMACD(candles);
         const stochastic = calcStochastic(candles);
         const williamsR = calcWilliamsR(candles);
@@ -273,329 +288,949 @@ export async function analyzeAdvancedIndicators(symbol, direction) {
         const cci = calcCCI(candles);
         const sar = calcParabolicSAR(candles);
         const ichimoku = calcIchimoku(candles);
+
+        // Tính toán các chỉ báo nâng cao mới (10 chỉ báo)
+        const macdHistogram = calcMACDHistogram(candles);
+        const atrp = calcATRP(candles);
+        const roc = calcROC(candles);
+        const obv = calcOBV(candles);
+        const adLine = calcADLine(candles);
+        const vpt = calcVPT(candles);
+        const ultimateOscillator = calcUltimateOscillator(candles);
+        const adxr = calcADXR(candles);
+        const massIndex = calcMassIndex(candles);
+        const tsi = calcTSI(candles);
         
-        // Phân tích tín hiệu cho từng chỉ báo
+        // Đánh giá tín hiệu cho từng chỉ báo (17 chỉ báo tổng cộng)
         const signals = {
+            // Chỉ báo cũ (7 chỉ báo)
             macdSignal: false,
             stochasticSignal: false,
             williamsSignal: false,
             mfiSignal: false,
             cciSignal: false,
             sarSignal: false,
-            ichimokuSignal: false
+            ichimokuSignal: false,
+            
+            // Chỉ báo mới (10 chỉ báo)
+            macdHistogramSignal: false,
+            atrpSignal: false,
+            rocSignal: false,
+            obvSignal: false,
+            adLineSignal: false,
+            vptSignal: false,
+            ultimateOscillatorSignal: false,
+            adxrSignal: false,
+            massIndexSignal: false,
+            tsiSignal: false
         };
         
-        // MACD Signal
-        if (macd && macd.macd && macd.signal) {
-            if (direction === 'LONG') {
-                signals.macdSignal = macd.macd > macd.signal && macd.histogram > 0;
-            } else if (direction === 'SHORT') {
-                signals.macdSignal = macd.macd < macd.signal && macd.histogram < 0;
+        let totalScore = 0;
+        const maxScore = 100;
+        
+        // MACD Analysis (20 điểm)
+        if (macd) {
+            if (direction === 'LONG' && macd.bullish) {
+                signals.macdSignal = true;
+                totalScore += 20;
+            } else if (direction === 'SHORT' && macd.bearish) {
+                signals.macdSignal = true;
+                totalScore += 20;
+            } else if (direction === 'LONG' && macd.macd > macd.signal) {
+                totalScore += 10;
+            } else if (direction === 'SHORT' && macd.macd < macd.signal) {
+                totalScore += 10;
             }
         }
         
-        // Stochastic Signal
-        if (stochastic && stochastic.k && stochastic.d) {
-            if (direction === 'LONG') {
-                signals.stochasticSignal = stochastic.k > stochastic.d && stochastic.k < 80;
-            } else if (direction === 'SHORT') {
-                signals.stochasticSignal = stochastic.k < stochastic.d && stochastic.k > 20;
+        // Stochastic Analysis (15 điểm)
+        if (stochastic) {
+            if (direction === 'LONG' && stochastic.bullishCrossover && stochastic.k < 80) {
+                signals.stochasticSignal = true;
+                totalScore += 15;
+            } else if (direction === 'SHORT' && stochastic.bearishCrossover && stochastic.k > 20) {
+                signals.stochasticSignal = true;
+                totalScore += 15;
+            } else if (direction === 'LONG' && stochastic.k < 50) {
+                totalScore += 8;
+            } else if (direction === 'SHORT' && stochastic.k > 50) {
+                totalScore += 8;
             }
         }
         
-        // Williams %R Signal
-        if (williamsR && williamsR.value !== null) {
-            if (direction === 'LONG') {
-                signals.williamsSignal = williamsR.value > -80 && williamsR.value < -20;
-            } else if (direction === 'SHORT') {
-                signals.williamsSignal = williamsR.value < -20 && williamsR.value > -80;
+        // Williams %R Analysis (10 điểm)
+        if (williamsR) {
+            if (direction === 'LONG' && williamsR.bullish) {
+                signals.williamsSignal = true;
+                totalScore += 10;
+            } else if (direction === 'SHORT' && williamsR.bearish) {
+                signals.williamsSignal = true;
+                totalScore += 10;
+            } else if (direction === 'LONG' && williamsR.oversold) {
+                totalScore += 5;
+            } else if (direction === 'SHORT' && williamsR.overbought) {
+                totalScore += 5;
             }
         }
         
-        // MFI Signal
-        if (mfi && mfi.value !== null) {
-            if (direction === 'LONG') {
-                signals.mfiSignal = mfi.value > 20 && mfi.value < 80;
-            } else if (direction === 'SHORT') {
-                signals.mfiSignal = mfi.value < 80 && mfi.value > 20;
+        // MFI Analysis (15 điểm)
+        if (mfi) {
+            if (direction === 'LONG' && mfi.bullish) {
+                signals.mfiSignal = true;
+                totalScore += 15;
+            } else if (direction === 'SHORT' && mfi.bearish) {
+                signals.mfiSignal = true;
+                totalScore += 15;
+            } else if (direction === 'LONG' && mfi.value < 50) {
+                totalScore += 8;
+            } else if (direction === 'SHORT' && mfi.value > 50) {
+                totalScore += 8;
             }
         }
         
-        // CCI Signal
-        if (cci && cci.value !== null) {
-            if (direction === 'LONG') {
-                signals.cciSignal = cci.value > -100 && cci.value < 100;
-            } else if (direction === 'SHORT') {
-                signals.cciSignal = cci.value < 100 && cci.value > -100;
+        // CCI Analysis (15 điểm)
+        if (cci) {
+            if (direction === 'LONG' && cci.bullish) {
+                signals.cciSignal = true;
+                totalScore += 15;
+            } else if (direction === 'SHORT' && cci.bearish) {
+                signals.cciSignal = true;
+                totalScore += 15;
+            } else if (direction === 'LONG' && cci.value > 0) {
+                totalScore += 8;
+            } else if (direction === 'SHORT' && cci.value < 0) {
+                totalScore += 8;
             }
         }
         
-        // Parabolic SAR Signal
-        if (sar && sar.trend !== null) {
-            if (direction === 'LONG') {
-                signals.sarSignal = sar.trend === 1;
-            } else if (direction === 'SHORT') {
-                signals.sarSignal = sar.trend === -1;
+        // Parabolic SAR Analysis (10 điểm)
+        if (sar) {
+            if (direction === 'LONG' && sar.bullish) {
+                signals.sarSignal = true;
+                totalScore += 10;
+            } else if (direction === 'SHORT' && sar.bearish) {
+                signals.sarSignal = true;
+                totalScore += 10;
             }
         }
         
-        // Ichimoku Signal
+        // Ichimoku Analysis (15 điểm)
         if (ichimoku) {
-            if (direction === 'LONG') {
-                signals.ichimokuSignal = ichimoku.isAboveCloud && ichimoku.currentPrice > ichimoku.tenkan;
-            } else if (direction === 'SHORT') {
-                signals.ichimokuSignal = ichimoku.isBelowCloud && ichimoku.currentPrice < ichimoku.tenkan;
+            if (direction === 'LONG' && ichimoku.bullish) {
+                signals.ichimokuSignal = true;
+                totalScore += 15;
+            } else if (direction === 'SHORT' && ichimoku.bearish) {
+                signals.ichimokuSignal = true;
+                totalScore += 15;
+            } else if (direction === 'LONG' && ichimoku.isAboveCloud) {
+                totalScore += 8;
+            } else if (direction === 'SHORT' && ichimoku.isBelowCloud) {
+                totalScore += 8;
             }
         }
+        
+        // ============== PHÂN TÍCH CÁC CHỈ BÁO MỚI (10 chỉ báo) ==============
+        
+        // MACD Histogram Analysis (8 điểm)
+        if (macdHistogram) {
+            if (direction === 'LONG' && macdHistogram.bullish) {
+                signals.macdHistogramSignal = true;
+                totalScore += 8;
+            } else if (direction === 'SHORT' && macdHistogram.bearish) {
+                signals.macdHistogramSignal = true;
+                totalScore += 8;
+            }
+        }
+        
+        // ATRP Analysis (6 điểm)
+        if (atrp) {
+            if (!atrp.highVolatility) { // Tránh volatility cao
+                signals.atrpSignal = true;
+                totalScore += 6;
+            }
+        }
+        
+        // ROC Analysis (8 điểm)
+        if (roc) {
+            if (direction === 'LONG' && roc.bullish) {
+                signals.rocSignal = true;
+                totalScore += 8;
+            } else if (direction === 'SHORT' && roc.bearish) {
+                signals.rocSignal = true;
+                totalScore += 8;
+            } else if (direction === 'LONG' && roc.strongBullish) {
+                totalScore += 4;
+            } else if (direction === 'SHORT' && roc.strongBearish) {
+                totalScore += 4;
+            }
+        }
+        
+        // OBV Analysis (7 điểm)
+        if (obv) {
+            if (direction === 'LONG' && obv.bullish) {
+                signals.obvSignal = true;
+                totalScore += 7;
+            } else if (direction === 'SHORT' && obv.bearish) {
+                signals.obvSignal = true;
+                totalScore += 7;
+            }
+        }
+        
+        // A/D Line Analysis (6 điểm)
+        if (adLine) {
+            if (direction === 'LONG' && adLine.bullish) {
+                signals.adLineSignal = true;
+                totalScore += 6;
+            } else if (direction === 'SHORT' && adLine.bearish) {
+                signals.adLineSignal = true;
+                totalScore += 6;
+            }
+        }
+        
+        // VPT Analysis (7 điểm)
+        if (vpt) {
+            if (direction === 'LONG' && vpt.bullish) {
+                signals.vptSignal = true;
+                totalScore += 7;
+            } else if (direction === 'SHORT' && vpt.bearish) {
+                signals.vptSignal = true;
+                totalScore += 7;
+            }
+        }
+        
+        // Ultimate Oscillator Analysis (8 điểm)
+        if (ultimateOscillator) {
+            if (direction === 'LONG' && ultimateOscillator.bullish) {
+                signals.ultimateOscillatorSignal = true;
+                totalScore += 8;
+            } else if (direction === 'SHORT' && ultimateOscillator.bearish) {
+                signals.ultimateOscillatorSignal = true;
+                totalScore += 8;
+            }
+        }
+        
+        // ADXR Analysis (6 điểm)
+        if (adxr) {
+            if (adxr.strong) {
+                signals.adxrSignal = true;
+                totalScore += 6;
+            }
+        }
+        
+        // Mass Index Analysis (5 điểm)
+        if (massIndex) {
+            if (massIndex.continuation) {
+                signals.massIndexSignal = true;
+                totalScore += 5;
+            }
+        }
+        
+        // TSI Analysis (9 điểm)
+        if (tsi) {
+            if (direction === 'LONG' && tsi.bullish) {
+                signals.tsiSignal = true;
+                totalScore += 9;
+            } else if (direction === 'SHORT' && tsi.bearish) {
+                signals.tsiSignal = true;
+                totalScore += 9;
+            } else if (direction === 'LONG' && tsi.strongBullish) {
+                totalScore += 5;
+            } else if (direction === 'SHORT' && tsi.strongBearish) {
+                totalScore += 5;
+            }
+        }
+        
+        const finalScore = Math.round((totalScore / maxScore) * 100);
+        const signalCount = Object.values(signals).filter(Boolean).length;
         
         return {
-            summary: signals,
+            score: finalScore,
+            signalCount,
+            signals,
             details: {
+                // Chỉ báo cũ
                 macd,
                 stochastic,
                 williamsR,
                 mfi,
                 cci,
                 sar,
-                ichimoku
+                ichimoku,
+                
+                // Chỉ báo mới
+                macdHistogram,
+                atrp,
+                roc,
+                obv,
+                adLine,
+                vpt,
+                ultimateOscillator,
+                adxr,
+                massIndex,
+                tsi
             }
         };
         
     } catch (error) {
         console.error(`Lỗi phân tích chỉ báo nâng cao cho ${symbol}:`, error);
-        return { summary: {}, details: {} };
+        return { score: 0, signals: {}, details: {} };
     }
 }
 
 /**
- * Tạo báo cáo chi tiết về chỉ báo nâng cao
+ * Hệ thống cảnh báo rủi ro và điểm thoát lệnh
  */
-export function generateAdvancedIndicatorReport(advancedIndicators) {
-    if (!advancedIndicators || !advancedIndicators.details) {
-        return "Không có dữ liệu chỉ báo nâng cao.";
+export async function analyzeRiskAndExitPoints(symbol, direction, entryPrice, stopLoss) {
+    try {
+        const candles = await getCandles(symbol, "1H", 50);
+        if (!candles || candles.length < 20) {
+            return { riskLevel: "UNKNOWN", exitRecommendation: "HOLD" };
+        }
+        
+        const currentPrice = await getCurrentPrice(symbol);
+        if (!currentPrice) {
+            return { riskLevel: "UNKNOWN", exitRecommendation: "HOLD" };
+        }
+        
+        // Tính toán các chỉ báo rủi ro
+        const rsi = calcRSI(candles, 14);
+        const atr = calcATR(candles, 14);
+        const macd = calcMACD(candles);
+        const stochastic = calcStochastic(candles);
+        const williamsR = calcWilliamsR(candles);
+        
+        // Phân tích rủi ro
+        let riskScore = 0;
+        let riskFactors = [];
+        
+        // RSI quá cao/thấp
+        if (direction === 'LONG' && rsi > 80) {
+            riskScore += 30;
+            riskFactors.push("RSI quá cao");
+        } else if (direction === 'SHORT' && rsi < 20) {
+            riskScore += 30;
+            riskFactors.push("RSI quá thấp");
+        }
+        
+        // Stochastic quá cao/thấp
+        if (stochastic) {
+            if (direction === 'LONG' && stochastic.k > 85) {
+                riskScore += 25;
+                riskFactors.push("Stochastic quá cao");
+            } else if (direction === 'SHORT' && stochastic.k < 15) {
+                riskScore += 25;
+                riskFactors.push("Stochastic quá thấp");
+            }
+        }
+        
+        // Williams %R quá cao/thấp
+        if (williamsR) {
+            if (direction === 'LONG' && williamsR.value > -10) {
+                riskScore += 20;
+                riskFactors.push("Williams %R quá cao");
+            } else if (direction === 'SHORT' && williamsR.value < -90) {
+                riskScore += 20;
+                riskFactors.push("Williams %R quá thấp");
+            }
+        }
+        
+        // MACD divergence
+        if (macd) {
+            if (direction === 'LONG' && macd.bearish) {
+                riskScore += 25;
+                riskFactors.push("MACD bearish");
+            } else if (direction === 'SHORT' && macd.bullish) {
+                riskScore += 25;
+                riskFactors.push("MACD bullish");
+            }
+        }
+        
+        // Khoảng cách đến SL
+        const distanceToSL = Math.abs(currentPrice - stopLoss) / currentPrice;
+        if (distanceToSL < 0.02) { // < 2%
+            riskScore += 40;
+            riskFactors.push("Gần Stop Loss");
+        } else if (distanceToSL < 0.05) { // < 5%
+            riskScore += 20;
+            riskFactors.push("Khá gần Stop Loss");
+        }
+        
+        // Biến động cao
+        const volatility = atr / currentPrice;
+        if (volatility > 0.05) {
+            riskScore += 15;
+            riskFactors.push("Biến động cao");
+        }
+        
+        // Xác định mức rủi ro
+        let riskLevel = "LOW";
+        let exitRecommendation = "HOLD";
+        
+        if (riskScore >= 70) {
+            riskLevel = "HIGH";
+            exitRecommendation = "EXIT_NOW";
+        } else if (riskScore >= 50) {
+            riskLevel = "MEDIUM";
+            exitRecommendation = "CONSIDER_EXIT";
+        } else if (riskScore >= 30) {
+            riskLevel = "LOW";
+            exitRecommendation = "WATCH_CLOSELY";
+        } else {
+            riskLevel = "VERY_LOW";
+            exitRecommendation = "HOLD";
+        }
+        
+        // Tính điểm thoát tối ưu
+        let optimalExitPrice = null;
+        if (direction === 'LONG') {
+            // Tìm điểm thoát dựa trên resistance levels
+            const highs = candles.slice(-20).map(c => c.high);
+            const resistanceLevel = Math.max(...highs);
+            if (resistanceLevel > currentPrice && resistanceLevel < entryPrice * 1.1) {
+                optimalExitPrice = resistanceLevel * 0.98; // 2% dưới resistance
+            }
+        } else {
+            // Tìm điểm thoát dựa trên support levels
+            const lows = candles.slice(-20).map(c => c.low);
+            const supportLevel = Math.min(...lows);
+            if (supportLevel < currentPrice && supportLevel > entryPrice * 0.9) {
+                optimalExitPrice = supportLevel * 1.02; // 2% trên support
+            }
+        }
+        
+        return {
+            riskLevel,
+            riskScore: Math.min(riskScore, 100),
+            riskFactors,
+            exitRecommendation,
+            optimalExitPrice,
+            currentPrice,
+            distanceToSL: (distanceToSL * 100).toFixed(2) + "%",
+            volatility: (volatility * 100).toFixed(2) + "%",
+            rsi: rsi.toFixed(1),
+            atr: atr.toFixed(4)
+        };
+        
+    } catch (error) {
+        console.error(`Lỗi phân tích rủi ro cho ${symbol}:`, error);
+        return { riskLevel: "UNKNOWN", exitRecommendation: "HOLD" };
+    }
+}
+
+/**
+ * Tạo báo cáo cảnh báo rủi ro
+ */
+export function generateRiskReport(riskAnalysis) {
+    if (!riskAnalysis || riskAnalysis.riskLevel === "UNKNOWN") {
+        return "Không thể phân tích rủi ro.";
     }
     
-    const { details, summary } = advancedIndicators;
-    let report = "🔥 *BÁO CÁO CHỈ BÁO NÂNG CAO*\n\n";
+    const { riskLevel, riskScore, riskFactors, exitRecommendation, optimalExitPrice, currentPrice, distanceToSL, volatility, rsi } = riskAnalysis;
     
-    // MACD
-    if (details.macd) {
-        const macdIcon = summary.macdSignal ? '✅' : '❌';
-        report += `${macdIcon} *MACD:* ${details.macd.macd.toFixed(4)} | Signal: ${details.macd.signal.toFixed(4)}\n`;
-        report += `   Histogram: ${details.macd.histogram.toFixed(4)}\n`;
+    let report = `🚨 *CẢNH BÁO RỦI RO*\n\n`;
+    
+    // Mức rủi ro
+    let riskIcon = "🟢";
+    if (riskLevel === "HIGH") riskIcon = "🔴";
+    else if (riskLevel === "MEDIUM") riskIcon = "🟡";
+    else if (riskLevel === "LOW") riskIcon = "🟠";
+    
+    report += `${riskIcon} *Mức rủi ro:* ${riskLevel} (${riskScore}/100)\n`;
+    report += `💰 *Giá hiện tại:* ${currentPrice.toFixed(4)}\n`;
+    report += `📏 *Khoảng cách SL:* ${distanceToSL}\n`;
+    report += `📊 *Biến động:* ${volatility}\n`;
+    report += `📈 *RSI:* ${rsi}\n\n`;
+    
+    // Các yếu tố rủi ro
+    if (riskFactors.length > 0) {
+        report += `⚠️ *Các yếu tố rủi ro:*\n`;
+        riskFactors.forEach(factor => {
+            report += `• ${factor}\n`;
+        });
+        report += `\n`;
     }
     
-    // Stochastic
-    if (details.stochastic) {
-        const stochIcon = summary.stochasticSignal ? '✅' : '❌';
-        report += `${stochIcon} *Stochastic:* K=${details.stochastic.k.toFixed(2)}, D=${details.stochastic.d.toFixed(2)}\n`;
+    // Khuyến nghị thoát lệnh
+    let exitIcon = "✅";
+    let exitText = "";
+    
+    switch (exitRecommendation) {
+        case "EXIT_NOW":
+            exitIcon = "🚨";
+            exitText = "THOÁT LỆNH NGAY LẬP TỨC";
+            break;
+        case "CONSIDER_EXIT":
+            exitIcon = "⚠️";
+            exitText = "CÂN NHẮC THOÁT LỆNH";
+            break;
+        case "WATCH_CLOSELY":
+            exitIcon = "👀";
+            exitText = "THEO DÕI CHẶT CHẼ";
+            break;
+        default:
+            exitIcon = "✅";
+            exitText = "GIỮ LỆNH";
     }
     
-    // Williams %R
-    if (details.williamsR) {
-        const williamsIcon = summary.williamsSignal ? '✅' : '❌';
-        report += `${williamsIcon} *Williams %R:* ${details.williamsR.value.toFixed(2)}\n`;
-    }
+    report += `${exitIcon} *Khuyến nghị:* ${exitText}\n`;
     
-    // MFI
-    if (details.mfi) {
-        const mfiIcon = summary.mfiSignal ? '✅' : '❌';
-        report += `${mfiIcon} *MFI:* ${details.mfi.value.toFixed(2)}\n`;
-    }
-    
-    // CCI
-    if (details.cci) {
-        const cciIcon = summary.cciSignal ? '✅' : '❌';
-        report += `${cciIcon} *CCI:* ${details.cci.value.toFixed(2)}\n`;
-    }
-    
-    // Parabolic SAR
-    if (details.sar) {
-        const sarIcon = summary.sarSignal ? '✅' : '❌';
-        const trendText = details.sar.trend === 1 ? 'Tăng' : 'Giảm';
-        report += `${sarIcon} *Parabolic SAR:* ${details.sar.value.toFixed(4)} (${trendText})\n`;
-    }
-    
-    // Ichimoku
-    if (details.ichimoku) {
-        const ichimokuIcon = summary.ichimokuSignal ? '✅' : '❌';
-        report += `${ichimokuIcon} *Ichimoku:* Tenkan=${details.ichimoku.tenkan.toFixed(4)}\n`;
-        report += `   Cloud: ${details.ichimoku.cloudBottom.toFixed(4)} - ${details.ichimoku.cloudTop.toFixed(4)}\n`;
-        report += `   Position: ${details.ichimoku.isAboveCloud ? 'Trên Cloud' : details.ichimoku.isBelowCloud ? 'Dưới Cloud' : 'Trong Cloud'}\n`;
-    }
-    
-    // Tổng kết
-    const signalCount = Object.values(summary).filter(Boolean).length;
-    report += `\n🎯 *Tổng số chỉ báo đồng thuận:* ${signalCount}/7\n`;
-    
-    if (signalCount >= 5) {
-        report += `🔥 *Đánh giá:* TÍN HIỆU RẤT MẠNH\n`;
-    } else if (signalCount >= 3) {
-        report += `⚠️ *Đánh giá:* Tín hiệu TRUNG BÌNH\n`;
-    } else {
-        report += `❌ *Đánh giá:* Tín hiệu YẾU\n`;
+    if (optimalExitPrice) {
+        report += `🎯 *Điểm thoát tối ưu:* ${optimalExitPrice.toFixed(4)}\n`;
     }
     
     return report;
 }
 
 /**
- * Phát hiện tín hiệu đảo chiều
+ * Tạo báo cáo chỉ báo nâng cao
  */
-export function detectReversalSignals(candles) {
-    if (candles.length < 20) return null;
+export function generateAdvancedIndicatorReport(analysis) {
+    if (!analysis || !analysis.details) {
+        return "Không có dữ liệu chỉ báo nâng cao.";
+    }
     
-    const rsi = calcRSI(candles, 14);
-    const stochastic = calcStochastic(candles);
-    const williamsR = calcWilliamsR(candles);
+    const { score, signalCount, signals, details } = analysis;
     
-    let bullishSignals = 0;
-    let bearishSignals = 0;
+    let report = `🔥 *BÁO CÁO CHỈ BÁO NÂNG CAO*\n\n`;
+    report += `🎯 *Điểm tổng thể:* ${score}/100\n`;
+    report += `📊 *Chỉ báo đồng thuận:* ${signalCount}/17\n\n`;
     
-    // RSI Divergence
-    if (rsi < 30) bullishSignals++;
-    if (rsi > 70) bearishSignals++;
+    // Chi tiết từng chỉ báo
+    report += `📈 *Chi tiết chỉ báo:*\n`;
+    
+    // MACD
+    if (details.macd) {
+        const icon = signals.macdSignal ? '✅' : '❌';
+        report += `${icon} *MACD:* ${details.macd.macd.toFixed(4)} | Signal: ${details.macd.signal.toFixed(4)}\n`;
+        report += `   Histogram: ${details.macd.histogram.toFixed(4)}\n`;
+    }
     
     // Stochastic
-    if (stochastic && stochastic.k < 20) bullishSignals++;
-    if (stochastic && stochastic.k > 80) bearishSignals++;
+    if (details.stochastic) {
+        const icon = signals.stochasticSignal ? '✅' : '❌';
+        report += `${icon} *Stochastic:* K=${details.stochastic.k.toFixed(2)}, D=${details.stochastic.d.toFixed(2)}\n`;
+    }
     
     // Williams %R
-    if (williamsR && williamsR.value < -80) bullishSignals++;
-    if (williamsR && williamsR.value > -20) bearishSignals++;
+    if (details.williamsR) {
+        const icon = signals.williamsSignal ? '✅' : '❌';
+        report += `${icon} *Williams %R:* ${details.williamsR.value.toFixed(2)}\n`;
+    }
     
-    // Candlestick patterns
-    const lastCandle = candles.at(-1);
-    const prevCandle = candles.at(-2);
+    // MFI
+    if (details.mfi) {
+        const icon = signals.mfiSignal ? '✅' : '❌';
+        report += `${icon} *MFI:* ${details.mfi.value.toFixed(2)}\n`;
+    }
     
-    // Hammer pattern
-    const isHammer = (lastCandle.close > lastCandle.open) && 
-                     ((lastCandle.close - lastCandle.open) * 2 < (lastCandle.open - lastCandle.low));
+    // CCI
+    if (details.cci) {
+        const icon = signals.cciSignal ? '✅' : '❌';
+        report += `${icon} *CCI:* ${details.cci.value.toFixed(2)}\n`;
+    }
     
-    // Engulfing pattern
-    const isBullishEngulfing = (prevCandle.close < prevCandle.open) && 
-                              (lastCandle.close > lastCandle.open) &&
-                              (lastCandle.open < prevCandle.close) &&
-                              (lastCandle.close > prevCandle.open);
+    // Parabolic SAR
+    if (details.sar) {
+        const icon = signals.sarSignal ? '✅' : '❌';
+        const trendText = details.sar.trend === 1 ? 'Tăng' : 'Giảm';
+        report += `${icon} *Parabolic SAR:* ${details.sar.value.toFixed(4)} (${trendText})\n`;
+    }
     
-    const isBearishEngulfing = (prevCandle.close > prevCandle.open) && 
-                              (lastCandle.close < lastCandle.open) &&
-                              (lastCandle.open > prevCandle.close) &&
-                              (lastCandle.close < prevCandle.open);
+    // Ichimoku
+    if (details.ichimoku) {
+        const icon = signals.ichimokuSignal ? '✅' : '❌';
+        report += `${icon} *Ichimoku:* Tenkan=${details.ichimoku.tenkan.toFixed(4)}\n`;
+        report += `   Cloud: ${details.ichimoku.cloudBottom.toFixed(4)} - ${details.ichimoku.cloudTop.toFixed(4)}\n`;
+        report += `   Position: ${details.ichimoku.isAboveCloud ? 'Trên Cloud' : details.ichimoku.isBelowCloud ? 'Dưới Cloud' : 'Trong Cloud'}\n`;
+    }
     
-    if (isHammer || isBullishEngulfing) bullishSignals += 2;
-    if (isBearishEngulfing) bearishSignals += 2;
+    // ============== CHỈ BÁO MỚI (10 chỉ báo) ==============
     
-    const strength = Math.max(bullishSignals, bearishSignals) * 20;
+    // MACD Histogram
+    if (details.macdHistogram) {
+        const icon = signals.macdHistogramSignal ? '✅' : '❌';
+        report += `${icon} *MACD Histogram:* ${details.macdHistogram.histogram.toFixed(4)}\n`;
+    }
+    
+    // ATRP
+    if (details.atrp) {
+        const icon = signals.atrpSignal ? '✅' : '❌';
+        report += `${icon} *ATRP:* ${details.atrp.value.toFixed(2)}% (Volatility)\n`;
+    }
+    
+    // ROC
+    if (details.roc) {
+        const icon = signals.rocSignal ? '✅' : '❌';
+        report += `${icon} *ROC:* ${details.roc.value.toFixed(2)}%\n`;
+    }
+    
+    // OBV
+    if (details.obv) {
+        const icon = signals.obvSignal ? '✅' : '❌';
+        report += `${icon} *OBV:* ${details.obv.value.toFixed(0)}\n`;
+    }
+    
+    // A/D Line
+    if (details.adLine) {
+        const icon = signals.adLineSignal ? '✅' : '❌';
+        report += `${icon} *A/D Line:* ${details.adLine.value.toFixed(0)}\n`;
+    }
+    
+    // VPT
+    if (details.vpt) {
+        const icon = signals.vptSignal ? '✅' : '❌';
+        report += `${icon} *VPT:* ${details.vpt.value.toFixed(0)}\n`;
+    }
+    
+    // Ultimate Oscillator
+    if (details.ultimateOscillator) {
+        const icon = signals.ultimateOscillatorSignal ? '✅' : '❌';
+        report += `${icon} *Ultimate Oscillator:* ${details.ultimateOscillator.value.toFixed(2)}\n`;
+    }
+    
+    // ADXR
+    if (details.adxr) {
+        const icon = signals.adxrSignal ? '✅' : '❌';
+        report += `${icon} *ADXR:* ${details.adxr.value.toFixed(2)}\n`;
+    }
+    
+    // Mass Index
+    if (details.massIndex) {
+        const icon = signals.massIndexSignal ? '✅' : '❌';
+        report += `${icon} *Mass Index:* ${details.massIndex.value.toFixed(2)}\n`;
+    }
+    
+    // TSI
+    if (details.tsi) {
+        const icon = signals.tsiSignal ? '✅' : '❌';
+        report += `${icon} *TSI:* ${details.tsi.value.toFixed(2)}\n`;
+    }
+    
+    // Đánh giá tổng thể
+    report += `\n🎯 *Đánh giá tổng thể:*\n`;
+    if (signalCount >= 12) {
+        report += `🔥 TÍN HIỆU RẤT MẠNH - Nhiều chỉ báo đồng thuận\n`;
+    } else if (signalCount >= 8) {
+        report += `⚠️ Tín hiệu TRUNG BÌNH - Một số chỉ báo đồng thuận\n`;
+    } else {
+        report += `❌ Tín hiệu YẾU - Ít chỉ báo đồng thuận\n`;
+    }
+    
+    return report;
+}
+
+// ============== 10 CHỈ BÁO NÂNG CAO MỚI ==============
+
+/**
+ * MACD Histogram với phân tích momentum
+ */
+export function calcMACDHistogram(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+    if (candles.length < slowPeriod + signalPeriod) return null;
+    
+    const closes = candles.map(c => c.close);
+    const ema12 = calcEMA(closes, fastPeriod);
+    const ema26 = calcEMA(closes, slowPeriod);
+    
+    const macdLine = [];
+    for (let i = slowPeriod - 1; i < closes.length; i++) {
+        macdLine.push(ema12[i] - ema26[i]);
+    }
+    
+    const signalLine = calcEMA(macdLine, signalPeriod);
+    const histogram = [];
+    
+    for (let i = signalPeriod - 1; i < macdLine.length; i++) {
+        histogram.push(macdLine[i] - signalLine[i - signalPeriod + 1]);
+    }
+    
+    const currentHistogram = histogram.at(-1);
+    const prevHistogram = histogram.at(-2);
+    const prev2Histogram = histogram.at(-3);
     
     return {
-        signal: bullishSignals > bearishSignals ? "BULLISH" : bearishSignals > bullishSignals ? "BEARISH" : "NONE",
-        strength: Math.min(strength, 100),
-        isHammer,
-        isBullishEngulfing,
-        isBearishEngulfing,
-        isDivergence: bullishSignals > 0 || bearishSignals > 0
+        histogram: currentHistogram,
+        prevHistogram: prevHistogram,
+        prev2Histogram: prev2Histogram,
+        bullish: currentHistogram > prevHistogram && prevHistogram > prev2Histogram,
+        bearish: currentHistogram < prevHistogram && prevHistogram < prev2Histogram,
+        strength: Math.abs(currentHistogram)
     };
 }
 
 /**
- * Phân tích thị trường hàng ngày
+ * Average True Range Percentage (ATRP)
  */
-export async function getDailyMarketAnalysis(symbol) {
-    try {
-        const candles = await getCandles(symbol, "1D", 30);
-        if (!candles || candles.length < 20) return null;
-        
-        const closes = candles.map(c => c.close);
-        const ema20 = calcEMA(closes, 20).at(-1);
-        const ema50 = calcEMA(closes, 50).at(-1);
-        const currentPrice = closes.at(-1);
-        
-        const rsi = calcRSI(candles, 14);
-        const atr = calcATR(candles, 14);
-        
-        // Phân tích xu hướng
-        let trend = "NEUTRAL";
-        let confidence = 50;
-        
-        if (currentPrice > ema20 && ema20 > ema50) {
-            trend = "BULLISH";
-            confidence = 75;
-        } else if (currentPrice < ema20 && ema20 < ema50) {
-            trend = "BEARISH";
-            confidence = 75;
-        }
-        
-        // Điều chỉnh confidence dựa trên RSI
-        if (trend === "BULLISH" && rsi > 70) confidence -= 20;
-        if (trend === "BEARISH" && rsi < 30) confidence -= 20;
-        
-        // Phân tích rủi ro
-        const volatility = atr / currentPrice;
-        let riskLevel = "LOW";
-        if (volatility > 0.05) riskLevel = "HIGH";
-        else if (volatility > 0.03) riskLevel = "MEDIUM";
-        
-        return {
-            recommendation: {
-                direction: trend,
-                confidence: Math.max(confidence, 30)
-            },
-            risk: {
-                riskLevel,
-                volatility,
-                priceChange: (currentPrice - closes.at(-2)) / closes.at(-2)
-            }
-        };
-        
-    } catch (error) {
-        console.error(`Lỗi phân tích thị trường cho ${symbol}:`, error);
-        return null;
+export function calcATRP(candles, period = 14) {
+    if (candles.length < period + 1) return null;
+    
+    const trs = [];
+    for (let i = 1; i < candles.length; i++) {
+        const h = candles[i].high;
+        const l = candles[i].low;
+        const pc = candles[i - 1].close;
+        const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+        trs.push(tr);
     }
+    
+    const atr = trs.slice(-period).reduce((a, b) => a + b, 0) / period;
+    const currentPrice = candles.at(-1).close;
+    const atrp = (atr / currentPrice) * 100;
+    
+    return {
+        value: atrp,
+        highVolatility: atrp > 3,
+        lowVolatility: atrp < 1,
+        strength: Math.min(atrp / 5, 1) * 100
+    };
 }
 
 /**
- * Phát hiện rủi ro crash
+ * Rate of Change (ROC)
  */
-export function detectCrashRisk(candles) {
-    if (candles.length < 20) return null;
+export function calcROC(candles, period = 12) {
+    if (candles.length < period + 1) return null;
     
-    const closes = candles.map(c => c.close);
-    const recentPrices = closes.slice(-10);
-    const olderPrices = closes.slice(-20, -10);
-    
-    const recentAvg = recentPrices.reduce((sum, price) => sum + price, 0) / recentPrices.length;
-    const olderAvg = olderPrices.reduce((sum, price) => sum + price, 0) / olderPrices.length;
-    
-    const priceChange = (recentAvg - olderAvg) / olderAvg;
-    const volatility = calcATR(candles.slice(-10), 10) / recentAvg;
-    
-    let riskScore = 0;
-    
-    // Giảm giá mạnh
-    if (priceChange < -0.1) riskScore += 40;
-    else if (priceChange < -0.05) riskScore += 20;
-    
-    // Biến động cao
-    if (volatility > 0.08) riskScore += 30;
-    else if (volatility > 0.05) riskScore += 15;
-    
-    // Volume spike (simplified)
-    const volumes = candles.map(c => c.volume || 0);
-    const avgVolume = volumes.slice(-20).reduce((sum, vol) => sum + vol, 0) / 20;
-    const recentVolume = volumes.slice(-5).reduce((sum, vol) => sum + vol, 0) / 5;
-    
-    if (recentVolume > avgVolume * 2) riskScore += 20;
-    else if (recentVolume > avgVolume * 1.5) riskScore += 10;
-    
-    let riskLevel = "LOW";
-    if (riskScore > 60) riskLevel = "HIGH";
-    else if (riskScore > 30) riskLevel = "MEDIUM";
+    const currentPrice = candles.at(-1).close;
+    const pastPrice = candles.at(-period - 1).close;
+    const roc = ((currentPrice - pastPrice) / pastPrice) * 100;
     
     return {
-        riskLevel,
-        riskScore: Math.min(riskScore, 100),
-        volatility,
-        priceChange
+        value: roc,
+        bullish: roc > 5,
+        bearish: roc < -5,
+        strongBullish: roc > 10,
+        strongBearish: roc < -10,
+        strength: Math.abs(roc) / 10
+    };
+}
+
+/**
+ * On-Balance Volume (OBV)
+ */
+export function calcOBV(candles) {
+    if (candles.length < 2) return null;
+    
+    let obv = 0;
+    const obvValues = [];
+    
+    for (let i = 1; i < candles.length; i++) {
+        const currentClose = candles[i].close;
+        const prevClose = candles[i - 1].close;
+        const volume = candles[i].volume || 0;
+        
+        if (currentClose > prevClose) {
+            obv += volume;
+        } else if (currentClose < prevClose) {
+            obv -= volume;
+        }
+        
+        obvValues.push(obv);
+    }
+    
+    const currentOBV = obvValues.at(-1);
+    const prevOBV = obvValues.at(-2);
+    const prev2OBV = obvValues.at(-3);
+    
+    return {
+        value: currentOBV,
+        bullish: currentOBV > prevOBV && prevOBV > prev2OBV,
+        bearish: currentOBV < prevOBV && prevOBV < prev2OBV,
+        divergence: (candles.at(-1).close > candles.at(-2).close && currentOBV < prevOBV) ||
+                   (candles.at(-1).close < candles.at(-2).close && currentOBV > prevOBV)
+    };
+}
+
+/**
+ * Accumulation/Distribution Line (A/D)
+ */
+export function calcADLine(candles) {
+    if (candles.length < 2) return null;
+    
+    let ad = 0;
+    const adValues = [];
+    
+    for (let i = 0; i < candles.length; i++) {
+        const candle = candles[i];
+        const high = candle.high;
+        const low = candle.low;
+        const close = candle.close;
+        const volume = candle.volume || 0;
+        
+        if (high !== low) {
+            const mfm = ((close - low) - (high - close)) / (high - low);
+            ad += mfm * volume;
+        }
+        
+        adValues.push(ad);
+    }
+    
+    const currentAD = adValues.at(-1);
+    const prevAD = adValues.at(-2);
+    const prev2AD = adValues.at(-3);
+    
+    return {
+        value: currentAD,
+        bullish: currentAD > prevAD && prevAD > prev2AD,
+        bearish: currentAD < prevAD && prevAD < prev2AD,
+        strength: Math.abs(currentAD - prevAD) / Math.abs(prevAD || 1)
+    };
+}
+
+/**
+ * Volume Price Trend (VPT)
+ */
+export function calcVPT(candles) {
+    if (candles.length < 2) return null;
+    
+    let vpt = 0;
+    const vptValues = [];
+    
+    for (let i = 1; i < candles.length; i++) {
+        const currentClose = candles[i].close;
+        const prevClose = candles[i - 1].close;
+        const volume = candles[i].volume || 0;
+        
+        const priceChange = (currentClose - prevClose) / prevClose;
+        vpt += volume * priceChange;
+        
+        vptValues.push(vpt);
+    }
+    
+    const currentVPT = vptValues.at(-1);
+    const prevVPT = vptValues.at(-2);
+    
+    return {
+        value: currentVPT,
+        bullish: currentVPT > prevVPT,
+        bearish: currentVPT < prevVPT,
+        strength: Math.abs(currentVPT - prevVPT) / Math.abs(prevVPT || 1)
+    };
+}
+
+/**
+ * Ultimate Oscillator
+ */
+export function calcUltimateOscillator(candles, period1 = 7, period2 = 14, period3 = 28) {
+    if (candles.length < period3) return null;
+    
+    const bp = []; // Buying Pressure
+    const tr = []; // True Range
+    
+    for (let i = 1; i < candles.length; i++) {
+        const current = candles[i];
+        const previous = candles[i - 1];
+        
+        const bpValue = current.close - Math.min(current.low, previous.close);
+        const trValue = Math.max(
+            current.high - current.low,
+            Math.abs(current.high - previous.close),
+            Math.abs(current.low - previous.close)
+        );
+        
+        bp.push(bpValue);
+        tr.push(trValue);
+    }
+    
+    const avg1 = bp.slice(-period1).reduce((a, b) => a + b, 0) / period1;
+    const avg2 = bp.slice(-period2).reduce((a, b) => a + b, 0) / period2;
+    const avg3 = bp.slice(-period3).reduce((a, b) => a + b, 0) / period3;
+    
+    const tr1 = tr.slice(-period1).reduce((a, b) => a + b, 0);
+    const tr2 = tr.slice(-period2).reduce((a, b) => a + b, 0);
+    const tr3 = tr.slice(-period3).reduce((a, b) => a + b, 0);
+    
+    const uo = 100 * ((4 * avg1 / tr1) + (2 * avg2 / tr2) + (avg3 / tr3)) / 7;
+    
+    return {
+        value: uo,
+        oversold: uo < 30,
+        overbought: uo > 70,
+        bullish: uo > 50 && uo < 70,
+        bearish: uo < 50 && uo > 30
+    };
+}
+
+/**
+ * Average Directional Movement Index Rating (ADXR)
+ */
+export function calcADXR(candles, period = 14) {
+    if (candles.length < period * 3) return null;
+    
+    const adx = calcADX(candles, period);
+    const adxValues = [];
+    
+    // Simplified ADX calculation for ADXR
+    for (let i = period; i < candles.length; i++) {
+        const slice = candles.slice(i - period, i);
+        const adxValue = calcADX(slice, period);
+        adxValues.push(adxValue.adx);
+    }
+    
+    const currentADX = adxValues.at(-1);
+    const prevADX = adxValues.at(-2);
+    const adxr = (currentADX + prevADX) / 2;
+    
+    return {
+        value: adxr,
+        strong: adxr > 25,
+        weak: adxr < 20,
+        strength: Math.min(adxr / 30, 1) * 100
+    };
+}
+
+/**
+ * Mass Index
+ */
+export function calcMassIndex(candles, period = 25) {
+    if (candles.length < period + 1) return null;
+    
+    const ema9 = calcEMA(candles.map(c => c.high - c.low), 9);
+    const ema9OfEMA9 = calcEMA(ema9, 9);
+    
+    const massIndex = [];
+    for (let i = 0; i < ema9OfEMA9.length; i++) {
+        if (ema9OfEMA9[i] !== 0) {
+            massIndex.push(ema9[i] / ema9OfEMA9[i]);
+        }
+    }
+    
+    const currentMI = massIndex.at(-1);
+    const sumMI = massIndex.slice(-period).reduce((a, b) => a + b, 0);
+    
+    return {
+        value: sumMI,
+        reversal: sumMI > 27,
+        continuation: sumMI < 26.5,
+        strength: Math.min(sumMI / 30, 1) * 100
+    };
+}
+
+/**
+ * True Strength Index (TSI)
+ */
+export function calcTSI(candles, longPeriod = 25, shortPeriod = 13) {
+    if (candles.length < longPeriod + shortPeriod) return null;
+    
+    const priceChanges = [];
+    for (let i = 1; i < candles.length; i++) {
+        priceChanges.push(candles[i].close - candles[i - 1].close);
+    }
+    
+    const smoothedPC = calcEMA(priceChanges, longPeriod);
+    const doubleSmoothedPC = calcEMA(smoothedPC, shortPeriod);
+    
+    const absPriceChanges = priceChanges.map(pc => Math.abs(pc));
+    const smoothedAPC = calcEMA(absPriceChanges, longPeriod);
+    const doubleSmoothedAPC = calcEMA(smoothedAPC, shortPeriod);
+    
+    const tsi = (doubleSmoothedPC.at(-1) / doubleSmoothedAPC.at(-1)) * 100;
+    
+    return {
+        value: tsi,
+        bullish: tsi > 25,
+        bearish: tsi < -25,
+        strongBullish: tsi > 50,
+        strongBearish: tsi < -50,
+        strength: Math.abs(tsi) / 50
     };
 }

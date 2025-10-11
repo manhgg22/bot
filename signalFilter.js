@@ -1,8 +1,8 @@
-// signalFilter.js - Hệ thống lọc và chấm điểm tín hiệu chất lượng cao
+// signalFilter.js - Hệ thống lọc và chấm điểm tín hiệu chất lượng cao với cảnh báo rủi ro
 import { getCandles, getCurrentPrice } from "./okx.js";
 import { calcEMA, calcRSI, calcATR, calcBollingerBands, calcAvgVolume, calcADX } from "./indicators.js";
 import { findSwingPoints, detectMomentum, findKeyLevels } from "./smc.js";
-import { analyzeAdvancedIndicators, generateAdvancedIndicatorReport } from "./advancedIndicators.js";
+import { analyzeAdvancedIndicators, generateAdvancedIndicatorReport, analyzeRiskAndExitPoints, generateRiskReport } from "./advancedIndicators.js";
 
 /**
  * Hệ thống chấm điểm tín hiệu đa chiều
@@ -289,9 +289,9 @@ export async function filterHighQualitySignals(signals, minScore = 70) {
                 details.structureScore >= 30 &&
                 details.volumeScore >= 50;
 
-            // Điều kiện nghiêm ngặt với chỉ báo nâng cao:
+            // Điều kiện nghiêm ngặt với chỉ báo nâng cao (17 chỉ báo):
             const advancedConditions = advancedIndicators && advancedIndicators.summary ? 
-                Object.values(advancedIndicators.summary).filter(Boolean).length >= 3 : false;
+                Object.values(advancedIndicators.summary).filter(Boolean).length >= 8 : false;
 
             // Điều kiện tổng hợp: Cơ bản + Nâng cao
             if (basicConditions && advancedConditions) {
@@ -307,9 +307,9 @@ export async function filterHighQualitySignals(signals, minScore = 70) {
 }
 
 /**
- * Tạo báo cáo chi tiết về chất lượng tín hiệu (NÂNG CẤP)
+ * Tạo báo cáo chi tiết về chất lượng tín hiệu với cảnh báo rủi ro
  */
-export function generateSignalReport(signal) {
+export async function generateSignalReport(signal) {
     if (!signal || !signal.scoreDetails) {
         return "Không có thông tin chi tiết về tín hiệu.";
     }
@@ -338,18 +338,17 @@ export function generateSignalReport(signal) {
     report += `• Key Levels gần: ${keyLevels.nearbyLevels} mức\n\n`;
 
     // Thêm báo cáo chỉ báo nâng cao
-    if (advancedIndicators && advancedIndicators.details) {
+    if (advancedIndicators && advancedIndicators.signals) {
         report += `🔥 *CHỈ BÁO NÂNG CAO:*\n`;
-        const { summary } = advancedIndicators;
-        const signalCount = Object.values(summary).filter(Boolean).length;
+        const { signals, signalCount } = advancedIndicators;
         
-        report += `• MACD: ${summary.macdSignal ? '✅' : '❌'}\n`;
-        report += `• Stochastic: ${summary.stochasticSignal ? '✅' : '❌'}\n`;
-        report += `• Williams %R: ${summary.williamsSignal ? '✅' : '❌'}\n`;
-        report += `• MFI: ${summary.mfiSignal ? '✅' : '❌'}\n`;
-        report += `• CCI: ${summary.cciSignal ? '✅' : '❌'}\n`;
-        report += `• Parabolic SAR: ${summary.sarSignal ? '✅' : '❌'}\n`;
-        report += `• Ichimoku: ${summary.ichimokuSignal ? '✅' : '❌'}\n\n`;
+        report += `• MACD: ${signals.macdSignal ? '✅' : '❌'}\n`;
+        report += `• Stochastic: ${signals.stochasticSignal ? '✅' : '❌'}\n`;
+        report += `• Williams %R: ${signals.williamsSignal ? '✅' : '❌'}\n`;
+        report += `• MFI: ${signals.mfiSignal ? '✅' : '❌'}\n`;
+        report += `• CCI: ${signals.cciSignal ? '✅' : '❌'}\n`;
+        report += `• Parabolic SAR: ${signals.sarSignal ? '✅' : '❌'}\n`;
+        report += `• Ichimoku: ${signals.ichimokuSignal ? '✅' : '❌'}\n\n`;
         
         report += `🎯 *Tổng số chỉ báo đồng thuận:* ${signalCount}/7\n`;
         
