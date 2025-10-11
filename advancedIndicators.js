@@ -1,6 +1,6 @@
 // advancedIndicators.js - Hệ thống chỉ báo nâng cao và cảnh báo rủi ro
 import { getCandles, getCurrentPrice } from "./okx.js";
-import { calcEMA, calcRSI, calcATR, calcBollingerBands, calcAvgVolume } from "./indicators.js";
+import { calcEMA, calcRSI, calcATR, calcBollingerBands, calcAvgVolume, calcADX } from "./indicators.js";
 
 /**
  * Tính toán MACD với tín hiệu mạnh mẽ

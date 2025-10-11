@@ -75,7 +75,7 @@ export function calcAvgVolume(candles, period = 20) {
     return volumes.slice(-period).reduce((sum, val) => sum + val, 0) / period;
 }
 
-function calcADX(candles, period = 14) {
+export function calcADX(candles, period = 14) {
     if (candles.length < period * 2) return { adx: 0 };
     let trs = [], pdms = [], mdms = [];
     for (let i = 1; i < candles.length; i++) {
