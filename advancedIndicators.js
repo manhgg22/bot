@@ -1,454 +1,601 @@
-// advancedIndicators.js - Hệ thống chỉ báo nâng cao và kết hợp
-import { getCandles } from "./okx.js";
+// advancedIndicators.js - Chỉ báo kỹ thuật nâng cao
+import { getCandles, getCurrentPrice } from "./okx.js";
+import { calcEMA, calcRSI, calcATR, calcBollingerBands, calcAvgVolume } from "./indicators.js";
 
 /**
- * MACD (Moving Average Convergence Divergence) với Histogram
+ * Tính toán MACD (Moving Average Convergence Divergence)
  */
 export function calcMACD(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
-    if (candles.length < slowPeriod + signalPeriod) {
-        return { macd: 0, signal: 0, histogram: 0, bullish: false, bearish: false };
-    }
-
+    if (candles.length < slowPeriod + signalPeriod) return null;
+    
     const closes = candles.map(c => c.close);
+    const ema12 = calcEMA(closes, fastPeriod);
+    const ema26 = calcEMA(closes, slowPeriod);
     
-    // Tính EMA
-    const calcEMA = (values, period) => {
-        const k = 2 / (period + 1);
-        return values.reduce((acc, price, i) => {
-            if (i === 0) return [price];
-            const ema = price * k + acc[i - 1] * (1 - k);
-            acc.push(ema);
-            return acc;
-        }, []);
-    };
-
-    const emaFast = calcEMA(closes, fastPeriod);
-    const emaSlow = calcEMA(closes, slowPeriod);
-    
-    // Tính MACD line
     const macdLine = [];
     for (let i = slowPeriod - 1; i < closes.length; i++) {
-        macdLine.push(emaFast[i] - emaSlow[i]);
+        macdLine.push(ema12[i] - ema26[i]);
     }
     
-    // Tính Signal line
     const signalLine = calcEMA(macdLine, signalPeriod);
+    const histogram = [];
     
-    const macd = macdLine.at(-1);
-    const signal = signalLine.at(-1);
-    const histogram = macd - signal;
-    
-    // Xác định tín hiệu
-    const prevMacd = macdLine.at(-2);
-    const prevSignal = signalLine.at(-2);
-    
-    const bullish = macd > signal && prevMacd <= prevSignal; // Bullish crossover
-    const bearish = macd < signal && prevMacd >= prevSignal; // Bearish crossover
+    for (let i = signalPeriod - 1; i < macdLine.length; i++) {
+        histogram.push(macdLine[i] - signalLine[i - signalPeriod + 1]);
+    }
     
     return {
-        macd: macd || 0,
-        signal: signal || 0,
-        histogram: histogram || 0,
-        bullish,
-        bearish,
-        strength: Math.abs(histogram) // Độ mạnh của histogram
+        macd: macdLine.at(-1),
+        signal: signalLine.at(-1),
+        histogram: histogram.at(-1),
+        prevMacd: macdLine.at(-2),
+        prevSignal: signalLine.at(-2),
+        prevHistogram: histogram.at(-2)
     };
 }
 
 /**
- * Stochastic Oscillator
+ * Tính toán Stochastic Oscillator
  */
 export function calcStochastic(candles, kPeriod = 14, dPeriod = 3) {
-    if (candles.length < kPeriod) {
-        return { k: 50, d: 50, oversold: false, overbought: false };
-    }
-
-    const recentCandles = candles.slice(-kPeriod);
-    const currentClose = candles.at(-1).close;
+    if (candles.length < kPeriod + dPeriod) return null;
     
-    const highestHigh = Math.max(...recentCandles.map(c => c.high));
-    const lowestLow = Math.min(...recentCandles.map(c => c.low));
-    
-    const k = ((currentClose - lowestLow) / (highestHigh - lowestLow)) * 100;
-    
-    // Tính %D (SMA của %K)
     const kValues = [];
     for (let i = kPeriod - 1; i < candles.length; i++) {
-        const periodCandles = candles.slice(i - kPeriod + 1, i + 1);
-        const hh = Math.max(...periodCandles.map(c => c.high));
-        const ll = Math.min(...periodCandles.map(c => c.low));
-        const cc = candles[i].close;
-        kValues.push(((cc - ll) / (hh - ll)) * 100);
+        const slice = candles.slice(i - kPeriod + 1, i + 1);
+        const highest = Math.max(...slice.map(c => c.high));
+        const lowest = Math.min(...slice.map(c => c.low));
+        const current = candles[i].close;
+        
+        const k = highest === lowest ? 50 : ((current - lowest) / (highest - lowest)) * 100;
+        kValues.push(k);
     }
     
-    const d = kValues.slice(-dPeriod).reduce((a, b) => a + b, 0) / dPeriod;
+    const dValues = [];
+    for (let i = dPeriod - 1; i < kValues.length; i++) {
+        const dSlice = kValues.slice(i - dPeriod + 1, i + 1);
+        dValues.push(dSlice.reduce((a, b) => a + b, 0) / dPeriod);
+    }
     
     return {
-        k: k || 50,
-        d: d || 50,
-        oversold: k < 20,
-        overbought: k > 80,
-        bullishDivergence: k > d && kValues.at(-2) <= kValues.at(-3), // Bullish crossover
-        bearishDivergence: k < d && kValues.at(-2) >= kValues.at(-3)  // Bearish crossover
+        k: kValues.at(-1),
+        d: dValues.at(-1),
+        prevK: kValues.at(-2),
+        prevD: dValues.at(-2)
     };
 }
 
 /**
- * Williams %R
+ * Tính toán Williams %R
  */
 export function calcWilliamsR(candles, period = 14) {
-    if (candles.length < period) {
-        return { williamsR: -50, oversold: false, overbought: false };
-    }
-
-    const recentCandles = candles.slice(-period);
-    const currentClose = candles.at(-1).close;
+    if (candles.length < period) return null;
     
-    const highestHigh = Math.max(...recentCandles.map(c => c.high));
-    const lowestLow = Math.min(...recentCandles.map(c => c.low));
+    const slice = candles.slice(-period);
+    const highest = Math.max(...slice.map(c => c.high));
+    const lowest = Math.min(...slice.map(c => c.low));
+    const current = candles.at(-1).close;
     
-    const williamsR = ((highestHigh - currentClose) / (highestHigh - lowestLow)) * -100;
+    const williamsR = highest === lowest ? -50 : ((highest - current) / (highest - lowest)) * -100;
     
     return {
-        williamsR: williamsR || -50,
-        oversold: williamsR < -80,
-        overbought: williamsR > -20,
-        bullish: williamsR < -50 && williamsR > -80, // Trong vùng oversold nhưng không quá cực đoan
-        bearish: williamsR > -50 && williamsR < -20  // Trong vùng overbought nhưng không quá cực đoan
+        value: williamsR,
+        prevValue: period < candles.length ? 
+            ((highest - candles.at(-2).close) / (highest - lowest)) * -100 : williamsR
     };
 }
 
 /**
- * Money Flow Index (MFI)
+ * Tính toán Money Flow Index (MFI)
  */
 export function calcMFI(candles, period = 14) {
-    if (candles.length < period + 1) {
-        return { mfi: 50, bullish: false, bearish: false };
-    }
-
-    let positiveFlow = 0;
-    let negativeFlow = 0;
+    if (candles.length < period + 1) return null;
     
-    for (let i = candles.length - period; i < candles.length; i++) {
-        const current = candles[i];
-        const previous = candles[i - 1];
+    const typicalPrices = [];
+    const moneyFlows = [];
+    
+    for (let i = 1; i < candles.length; i++) {
+        const typicalPrice = (candles[i].high + candles[i].low + candles[i].close) / 3;
+        const prevTypicalPrice = (candles[i-1].high + candles[i-1].low + candles[i-1].close) / 3;
         
-        const typicalPrice = (current.high + current.low + current.close) / 3;
-        const prevTypicalPrice = (previous.high + previous.low + previous.close) / 3;
+        typicalPrices.push(typicalPrice);
         
-        const moneyFlow = typicalPrice * current.volume;
+        const rawMoneyFlow = typicalPrice * candles[i].volume;
         
         if (typicalPrice > prevTypicalPrice) {
-            positiveFlow += moneyFlow;
+            moneyFlows.push({ positive: rawMoneyFlow, negative: 0 });
         } else if (typicalPrice < prevTypicalPrice) {
-            negativeFlow += moneyFlow;
+            moneyFlows.push({ positive: 0, negative: rawMoneyFlow });
+        } else {
+            moneyFlows.push({ positive: 0, negative: 0 });
         }
     }
     
-    const mfi = 100 - (100 / (1 + positiveFlow / negativeFlow));
+    if (moneyFlows.length < period) return null;
+    
+    const recentFlows = moneyFlows.slice(-period);
+    const positiveFlow = recentFlows.reduce((sum, flow) => sum + flow.positive, 0);
+    const negativeFlow = recentFlows.reduce((sum, flow) => sum + flow.negative, 0);
+    
+    const mfi = negativeFlow === 0 ? 100 : 100 - (100 / (1 + positiveFlow / negativeFlow));
     
     return {
-        mfi: mfi || 50,
-        bullish: mfi < 20, // Oversold
-        bearish: mfi > 80, // Overbought
-        strength: Math.abs(mfi - 50) / 50 // Độ mạnh của tín hiệu
+        value: mfi,
+        prevValue: moneyFlows.length >= period + 1 ? 
+            (() => {
+                const prevFlows = moneyFlows.slice(-period - 1, -1);
+                const prevPositive = prevFlows.reduce((sum, flow) => sum + flow.positive, 0);
+                const prevNegative = prevFlows.reduce((sum, flow) => sum + flow.negative, 0);
+                return prevNegative === 0 ? 100 : 100 - (100 / (1 + prevPositive / prevNegative));
+            })() : mfi
     };
 }
 
 /**
- * Commodity Channel Index (CCI)
+ * Tính toán Commodity Channel Index (CCI)
  */
 export function calcCCI(candles, period = 20) {
-    if (candles.length < period) {
-        return { cci: 0, bullish: false, bearish: false };
-    }
-
-    const recentCandles = candles.slice(-period);
-    const typicalPrices = recentCandles.map(c => (c.high + c.low + c.close) / 3);
+    if (candles.length < period) return null;
     
-    const sma = typicalPrices.reduce((a, b) => a + b, 0) / period;
-    const meanDeviation = typicalPrices.reduce((sum, tp) => sum + Math.abs(tp - sma), 0) / period;
+    const typicalPrices = candles.map(c => (c.high + c.low + c.close) / 3);
+    const recentPrices = typicalPrices.slice(-period);
+    const sma = recentPrices.reduce((sum, price) => sum + price, 0) / period;
     
-    const currentTypicalPrice = typicalPrices.at(-1);
-    const cci = (currentTypicalPrice - sma) / (0.015 * meanDeviation);
+    const meanDeviation = recentPrices.reduce((sum, price) => sum + Math.abs(price - sma), 0) / period;
+    
+    const cci = meanDeviation === 0 ? 0 : (typicalPrices.at(-1) - sma) / (0.015 * meanDeviation);
     
     return {
-        cci: cci || 0,
-        bullish: cci > 100, // Bullish breakout
-        bearish: cci < -100, // Bearish breakout
-        strength: Math.abs(cci) / 100, // Độ mạnh của breakout
-        overbought: cci > 200,
-        oversold: cci < -200
+        value: cci,
+        prevValue: typicalPrices.length >= period + 1 ? 
+            (() => {
+                const prevPrices = typicalPrices.slice(-period - 1, -1);
+                const prevSma = prevPrices.reduce((sum, price) => sum + price, 0) / period;
+                const prevMeanDev = prevPrices.reduce((sum, price) => sum + Math.abs(price - prevSma), 0) / period;
+                return prevMeanDev === 0 ? 0 : (typicalPrices.at(-2) - prevSma) / (0.015 * prevMeanDev);
+            })() : cci
     };
 }
 
 /**
- * Parabolic SAR
+ * Tính toán Parabolic SAR
  */
 export function calcParabolicSAR(candles, acceleration = 0.02, maximum = 0.2) {
-    if (candles.length < 2) {
-        return { sar: 0, trend: 'NEUTRAL', bullish: false, bearish: false };
-    }
-
+    if (candles.length < 2) return null;
+    
     let sar = candles[0].low;
-    let trend = 'BULLISH';
+    let trend = 1; // 1 = uptrend, -1 = downtrend
     let af = acceleration;
     let ep = candles[0].high;
     
     for (let i = 1; i < candles.length; i++) {
-        const current = candles[i];
+        const candle = candles[i];
         
-        if (trend === 'BULLISH') {
+        if (trend === 1) {
             sar = sar + af * (ep - sar);
-            
-            if (current.low <= sar) {
-                trend = 'BEARISH';
+            if (candle.low <= sar) {
+                trend = -1;
                 sar = ep;
+                ep = candle.low;
                 af = acceleration;
-                ep = current.low;
             } else {
-                if (current.high > ep) {
-                    ep = current.high;
+                if (candle.high > ep) {
+                    ep = candle.high;
                     af = Math.min(af + acceleration, maximum);
                 }
             }
         } else {
             sar = sar + af * (ep - sar);
-            
-            if (current.high >= sar) {
-                trend = 'BULLISH';
+            if (candle.high >= sar) {
+                trend = 1;
                 sar = ep;
+                ep = candle.high;
                 af = acceleration;
-                ep = current.high;
             } else {
-                if (current.low < ep) {
-                    ep = current.low;
+                if (candle.low < ep) {
+                    ep = candle.low;
                     af = Math.min(af + acceleration, maximum);
                 }
             }
         }
     }
     
-    const currentPrice = candles.at(-1).close;
-    const bullish = trend === 'BULLISH' && currentPrice > sar;
-    const bearish = trend === 'BEARISH' && currentPrice < sar;
-    
     return {
-        sar: sar || 0,
-        trend: trend || 'NEUTRAL',
-        bullish,
-        bearish,
-        distance: Math.abs(currentPrice - sar) / currentPrice // Khoảng cách từ SAR
+        value: sar,
+        trend: trend,
+        prevValue: candles.length >= 3 ? 
+            (() => {
+                // Simplified calculation for previous value
+                return trend === 1 ? Math.min(sar, candles.at(-2).low) : Math.max(sar, candles.at(-2).high);
+            })() : sar
     };
 }
 
 /**
- * Ichimoku Cloud (Simplified)
+ * Tính toán Ichimoku Cloud (simplified)
  */
-export function calcIchimoku(candles, tenkanPeriod = 9, kijunPeriod = 26, senkouSpanBPeriod = 52) {
-    if (candles.length < senkouSpanBPeriod) {
-        return { 
-            tenkan: 0, kijun: 0, senkouSpanA: 0, senkouSpanB: 0, 
-            chikou: 0, bullish: false, bearish: false 
-        };
-    }
-
+export function calcIchimoku(candles, conversionPeriod = 9, basePeriod = 26, leadingSpanBPeriod = 52) {
+    if (candles.length < leadingSpanBPeriod) return null;
+    
+    const closes = candles.map(c => c.close);
+    const highs = candles.map(c => c.high);
+    const lows = candles.map(c => c.low);
+    
     // Tenkan-sen (Conversion Line)
-    const tenkanHigh = Math.max(...candles.slice(-tenkanPeriod).map(c => c.high));
-    const tenkanLow = Math.min(...candles.slice(-tenkanPeriod).map(c => c.low));
+    const tenkanHigh = Math.max(...highs.slice(-conversionPeriod));
+    const tenkanLow = Math.min(...lows.slice(-conversionPeriod));
     const tenkan = (tenkanHigh + tenkanLow) / 2;
     
     // Kijun-sen (Base Line)
-    const kijunHigh = Math.max(...candles.slice(-kijunPeriod).map(c => c.high));
-    const kijunLow = Math.min(...candles.slice(-kijunPeriod).map(c => c.low));
+    const kijunHigh = Math.max(...highs.slice(-basePeriod));
+    const kijunLow = Math.min(...lows.slice(-basePeriod));
     const kijun = (kijunHigh + kijunLow) / 2;
     
     // Senkou Span A (Leading Span A)
-    const senkouSpanA = (tenkan + kijun) / 2;
+    const senkouA = (tenkan + kijun) / 2;
     
     // Senkou Span B (Leading Span B)
-    const senkouSpanBHigh = Math.max(...candles.slice(-senkouSpanBPeriod).map(c => c.high));
-    const senkouSpanBLow = Math.min(...candles.slice(-senkouSpanBPeriod).map(c => c.low));
-    const senkouSpanB = (senkouSpanBHigh + senkouSpanBLow) / 2;
+    const senkouBHigh = Math.max(...highs.slice(-leadingSpanBPeriod));
+    const senkouBLow = Math.min(...lows.slice(-leadingSpanBPeriod));
+    const senkouB = (senkouBHigh + senkouBLow) / 2;
     
     // Chikou Span (Lagging Span)
-    const chikou = candles.at(-26).close;
-    
-    const currentPrice = candles.at(-1).close;
-    
-    // Xác định tín hiệu
-    const bullish = currentPrice > senkouSpanA && currentPrice > senkouSpanB && tenkan > kijun;
-    const bearish = currentPrice < senkouSpanA && currentPrice < senkouSpanB && tenkan < kijun;
+    const chikou = closes.at(-1);
     
     return {
-        tenkan: tenkan || 0,
-        kijun: kijun || 0,
-        senkouSpanA: senkouSpanA || 0,
-        senkouSpanB: senkouSpanB || 0,
-        chikou: chikou || 0,
-        bullish,
-        bearish,
-        cloudThickness: Math.abs(senkouSpanA - senkouSpanB) / currentPrice // Độ dày của cloud
+        tenkan,
+        kijun,
+        senkouA,
+        senkouB,
+        chikou,
+        cloudTop: Math.max(senkouA, senkouB),
+        cloudBottom: Math.min(senkouA, senkouB),
+        currentPrice: closes.at(-1),
+        isAboveCloud: closes.at(-1) > Math.max(senkouA, senkouB),
+        isBelowCloud: closes.at(-1) < Math.min(senkouA, senkouB)
     };
 }
 
 /**
- * Hệ thống kết hợp tất cả chỉ báo để đánh giá chất lượng tín hiệu
+ * Phân tích tất cả chỉ báo nâng cao cho một symbol
  */
-export async function analyzeAdvancedIndicators(symbol, signalDirection) {
+export async function analyzeAdvancedIndicators(symbol, direction) {
     try {
-        const candles = await getCandles(symbol, '1H', 100);
-        if (candles.length < 50) {
-            return { score: 0, details: {} };
+        const candles = await getCandles(symbol, "1H", 100);
+        if (!candles || candles.length < 50) {
+            return { summary: {}, details: {} };
         }
-
-        // Tính tất cả chỉ báo
+        
         const macd = calcMACD(candles);
         const stochastic = calcStochastic(candles);
         const williamsR = calcWilliamsR(candles);
         const mfi = calcMFI(candles);
         const cci = calcCCI(candles);
-        const parabolicSAR = calcParabolicSAR(candles);
+        const sar = calcParabolicSAR(candles);
         const ichimoku = calcIchimoku(candles);
-
-        // Đánh giá từng chỉ báo theo hướng tín hiệu
-        let totalScore = 0;
-        let maxScore = 0;
-        const details = {};
-
-        // MACD Analysis (20 điểm)
-        maxScore += 20;
-        if (signalDirection === 'LONG') {
-            if (macd.bullish) totalScore += 20;
-            else if (macd.macd > macd.signal) totalScore += 10;
-            else if (macd.histogram > 0) totalScore += 5;
-        } else if (signalDirection === 'SHORT') {
-            if (macd.bearish) totalScore += 20;
-            else if (macd.macd < macd.signal) totalScore += 10;
-            else if (macd.histogram < 0) totalScore += 5;
+        
+        // Phân tích tín hiệu cho từng chỉ báo
+        const signals = {
+            macdSignal: false,
+            stochasticSignal: false,
+            williamsSignal: false,
+            mfiSignal: false,
+            cciSignal: false,
+            sarSignal: false,
+            ichimokuSignal: false
+        };
+        
+        // MACD Signal
+        if (macd && macd.macd && macd.signal) {
+            if (direction === 'LONG') {
+                signals.macdSignal = macd.macd > macd.signal && macd.histogram > 0;
+            } else if (direction === 'SHORT') {
+                signals.macdSignal = macd.macd < macd.signal && macd.histogram < 0;
+            }
         }
-        details.macd = { score: totalScore, ...macd };
-
-        // Stochastic Analysis (15 điểm)
-        maxScore += 15;
-        if (signalDirection === 'LONG') {
-            if (stochastic.oversold && stochastic.bullishDivergence) totalScore += 15;
-            else if (stochastic.oversold) totalScore += 10;
-            else if (stochastic.k < 50) totalScore += 5;
-        } else if (signalDirection === 'SHORT') {
-            if (stochastic.overbought && stochastic.bearishDivergence) totalScore += 15;
-            else if (stochastic.overbought) totalScore += 10;
-            else if (stochastic.k > 50) totalScore += 5;
+        
+        // Stochastic Signal
+        if (stochastic && stochastic.k && stochastic.d) {
+            if (direction === 'LONG') {
+                signals.stochasticSignal = stochastic.k > stochastic.d && stochastic.k < 80;
+            } else if (direction === 'SHORT') {
+                signals.stochasticSignal = stochastic.k < stochastic.d && stochastic.k > 20;
+            }
         }
-        details.stochastic = { score: totalScore - details.macd.score, ...stochastic };
-
-        // Williams %R Analysis (10 điểm)
-        maxScore += 10;
-        if (signalDirection === 'LONG') {
-            if (williamsR.oversold) totalScore += 10;
-            else if (williamsR.bullish) totalScore += 5;
-        } else if (signalDirection === 'SHORT') {
-            if (williamsR.overbought) totalScore += 10;
-            else if (williamsR.bearish) totalScore += 5;
+        
+        // Williams %R Signal
+        if (williamsR && williamsR.value !== null) {
+            if (direction === 'LONG') {
+                signals.williamsSignal = williamsR.value > -80 && williamsR.value < -20;
+            } else if (direction === 'SHORT') {
+                signals.williamsSignal = williamsR.value < -20 && williamsR.value > -80;
+            }
         }
-        details.williamsR = { score: totalScore - details.stochastic.score - details.macd.score, ...williamsR };
-
-        // MFI Analysis (15 điểm)
-        maxScore += 15;
-        if (signalDirection === 'LONG') {
-            if (mfi.bullish) totalScore += 15;
-            else if (mfi.mfi < 50) totalScore += 8;
-        } else if (signalDirection === 'SHORT') {
-            if (mfi.bearish) totalScore += 15;
-            else if (mfi.mfi > 50) totalScore += 8;
+        
+        // MFI Signal
+        if (mfi && mfi.value !== null) {
+            if (direction === 'LONG') {
+                signals.mfiSignal = mfi.value > 20 && mfi.value < 80;
+            } else if (direction === 'SHORT') {
+                signals.mfiSignal = mfi.value < 80 && mfi.value > 20;
+            }
         }
-        details.mfi = { score: totalScore - details.williamsR.score - details.stochastic.score - details.macd.score, ...mfi };
-
-        // CCI Analysis (15 điểm)
-        maxScore += 15;
-        if (signalDirection === 'LONG') {
-            if (cci.bullish) totalScore += 15;
-            else if (cci.cci > 0) totalScore += 8;
-        } else if (signalDirection === 'SHORT') {
-            if (cci.bearish) totalScore += 15;
-            else if (cci.cci < 0) totalScore += 8;
+        
+        // CCI Signal
+        if (cci && cci.value !== null) {
+            if (direction === 'LONG') {
+                signals.cciSignal = cci.value > -100 && cci.value < 100;
+            } else if (direction === 'SHORT') {
+                signals.cciSignal = cci.value < 100 && cci.value > -100;
+            }
         }
-        details.cci = { score: totalScore - details.mfi.score - details.williamsR.score - details.stochastic.score - details.macd.score, ...cci };
-
-        // Parabolic SAR Analysis (10 điểm)
-        maxScore += 10;
-        if (signalDirection === 'LONG' && parabolicSAR.bullish) {
-            totalScore += 10;
-        } else if (signalDirection === 'SHORT' && parabolicSAR.bearish) {
-            totalScore += 10;
+        
+        // Parabolic SAR Signal
+        if (sar && sar.trend !== null) {
+            if (direction === 'LONG') {
+                signals.sarSignal = sar.trend === 1;
+            } else if (direction === 'SHORT') {
+                signals.sarSignal = sar.trend === -1;
+            }
         }
-        details.parabolicSAR = { score: totalScore - details.cci.score - details.mfi.score - details.williamsR.score - details.stochastic.score - details.macd.score, ...parabolicSAR };
-
-        // Ichimoku Analysis (15 điểm)
-        maxScore += 15;
-        if (signalDirection === 'LONG' && ichimoku.bullish) {
-            totalScore += 15;
-        } else if (signalDirection === 'SHORT' && ichimoku.bearish) {
-            totalScore += 15;
+        
+        // Ichimoku Signal
+        if (ichimoku) {
+            if (direction === 'LONG') {
+                signals.ichimokuSignal = ichimoku.isAboveCloud && ichimoku.currentPrice > ichimoku.tenkan;
+            } else if (direction === 'SHORT') {
+                signals.ichimokuSignal = ichimoku.isBelowCloud && ichimoku.currentPrice < ichimoku.tenkan;
+            }
         }
-        details.ichimoku = { score: totalScore - details.parabolicSAR.score - details.cci.score - details.mfi.score - details.williamsR.score - details.stochastic.score - details.macd.score, ...ichimoku };
-
-        const finalScore = Math.round((totalScore / maxScore) * 100);
-
+        
         return {
-            score: finalScore,
-            totalScore,
-            maxScore,
-            details,
-            summary: {
-                macdSignal: macd.bullish || macd.bearish,
-                stochasticSignal: stochastic.oversold || stochastic.overbought,
-                williamsSignal: williamsR.oversold || williamsR.overbought,
-                mfiSignal: mfi.bullish || mfi.bearish,
-                cciSignal: cci.bullish || cci.bearish,
-                sarSignal: parabolicSAR.bullish || parabolicSAR.bearish,
-                ichimokuSignal: ichimoku.bullish || ichimoku.bearish
+            summary: signals,
+            details: {
+                macd,
+                stochastic,
+                williamsR,
+                mfi,
+                cci,
+                sar,
+                ichimoku
             }
         };
-
+        
     } catch (error) {
         console.error(`Lỗi phân tích chỉ báo nâng cao cho ${symbol}:`, error);
-        return { score: 0, details: {} };
+        return { summary: {}, details: {} };
     }
 }
 
 /**
- * Tạo báo cáo chi tiết về các chỉ báo
+ * Tạo báo cáo chi tiết về chỉ báo nâng cao
  */
-export function generateAdvancedIndicatorReport(analysis) {
-    if (!analysis || !analysis.details) {
-        return "Không có dữ liệu phân tích chỉ báo.";
+export function generateAdvancedIndicatorReport(advancedIndicators) {
+    if (!advancedIndicators || !advancedIndicators.details) {
+        return "Không có dữ liệu chỉ báo nâng cao.";
     }
-
-    const { details, summary } = analysis;
     
-    let report = `📊 *PHÂN TÍCH CHỈ BÁO NÂNG CAO*\n\n`;
-    report += `🎯 *Điểm tổng thể:* ${analysis.score}/100\n\n`;
+    const { details, summary } = advancedIndicators;
+    let report = "🔥 *BÁO CÁO CHỈ BÁO NÂNG CAO*\n\n";
     
-    report += `📈 *Chi tiết từng chỉ báo:*\n`;
-    report += `• MACD: ${details.macd?.score || 0}/20 ${summary.macdSignal ? '✅' : '❌'}\n`;
-    report += `• Stochastic: ${details.stochastic?.score || 0}/15 ${summary.stochasticSignal ? '✅' : '❌'}\n`;
-    report += `• Williams %R: ${details.williamsR?.score || 0}/10 ${summary.williamsSignal ? '✅' : '❌'}\n`;
-    report += `• MFI: ${details.mfi?.score || 0}/15 ${summary.mfiSignal ? '✅' : '❌'}\n`;
-    report += `• CCI: ${details.cci?.score || 0}/15 ${summary.cciSignal ? '✅' : '❌'}\n`;
-    report += `• Parabolic SAR: ${details.parabolicSAR?.score || 0}/10 ${summary.sarSignal ? '✅' : '❌'}\n`;
-    report += `• Ichimoku: ${details.ichimoku?.score || 0}/15 ${summary.ichimokuSignal ? '✅' : '❌'}\n\n`;
+    // MACD
+    if (details.macd) {
+        const macdIcon = summary.macdSignal ? '✅' : '❌';
+        report += `${macdIcon} *MACD:* ${details.macd.macd.toFixed(4)} | Signal: ${details.macd.signal.toFixed(4)}\n`;
+        report += `   Histogram: ${details.macd.histogram.toFixed(4)}\n`;
+    }
     
+    // Stochastic
+    if (details.stochastic) {
+        const stochIcon = summary.stochasticSignal ? '✅' : '❌';
+        report += `${stochIcon} *Stochastic:* K=${details.stochastic.k.toFixed(2)}, D=${details.stochastic.d.toFixed(2)}\n`;
+    }
+    
+    // Williams %R
+    if (details.williamsR) {
+        const williamsIcon = summary.williamsSignal ? '✅' : '❌';
+        report += `${williamsIcon} *Williams %R:* ${details.williamsR.value.toFixed(2)}\n`;
+    }
+    
+    // MFI
+    if (details.mfi) {
+        const mfiIcon = summary.mfiSignal ? '✅' : '❌';
+        report += `${mfiIcon} *MFI:* ${details.mfi.value.toFixed(2)}\n`;
+    }
+    
+    // CCI
+    if (details.cci) {
+        const cciIcon = summary.cciSignal ? '✅' : '❌';
+        report += `${cciIcon} *CCI:* ${details.cci.value.toFixed(2)}\n`;
+    }
+    
+    // Parabolic SAR
+    if (details.sar) {
+        const sarIcon = summary.sarSignal ? '✅' : '❌';
+        const trendText = details.sar.trend === 1 ? 'Tăng' : 'Giảm';
+        report += `${sarIcon} *Parabolic SAR:* ${details.sar.value.toFixed(4)} (${trendText})\n`;
+    }
+    
+    // Ichimoku
+    if (details.ichimoku) {
+        const ichimokuIcon = summary.ichimokuSignal ? '✅' : '❌';
+        report += `${ichimokuIcon} *Ichimoku:* Tenkan=${details.ichimoku.tenkan.toFixed(4)}\n`;
+        report += `   Cloud: ${details.ichimoku.cloudBottom.toFixed(4)} - ${details.ichimoku.cloudTop.toFixed(4)}\n`;
+        report += `   Position: ${details.ichimoku.isAboveCloud ? 'Trên Cloud' : details.ichimoku.isBelowCloud ? 'Dưới Cloud' : 'Trong Cloud'}\n`;
+    }
+    
+    // Tổng kết
     const signalCount = Object.values(summary).filter(Boolean).length;
-    report += `🔥 *Tổng số chỉ báo đồng thuận:* ${signalCount}/7\n`;
+    report += `\n🎯 *Tổng số chỉ báo đồng thuận:* ${signalCount}/7\n`;
     
     if (signalCount >= 5) {
-        report += `✅ *Đánh giá:* Tín hiệu RẤT MẠNH - Nhiều chỉ báo đồng thuận\n`;
+        report += `🔥 *Đánh giá:* TÍN HIỆU RẤT MẠNH\n`;
     } else if (signalCount >= 3) {
-        report += `⚠️ *Đánh giá:* Tín hiệu TRUNG BÌNH - Một số chỉ báo đồng thuận\n`;
+        report += `⚠️ *Đánh giá:* Tín hiệu TRUNG BÌNH\n`;
     } else {
-        report += `❌ *Đánh giá:* Tín hiệu YẾU - Ít chỉ báo đồng thuận\n`;
+        report += `❌ *Đánh giá:* Tín hiệu YẾU\n`;
     }
     
     return report;
+}
+
+/**
+ * Phát hiện tín hiệu đảo chiều
+ */
+export function detectReversalSignals(candles) {
+    if (candles.length < 20) return null;
+    
+    const rsi = calcRSI(candles, 14);
+    const stochastic = calcStochastic(candles);
+    const williamsR = calcWilliamsR(candles);
+    
+    let bullishSignals = 0;
+    let bearishSignals = 0;
+    
+    // RSI Divergence
+    if (rsi < 30) bullishSignals++;
+    if (rsi > 70) bearishSignals++;
+    
+    // Stochastic
+    if (stochastic && stochastic.k < 20) bullishSignals++;
+    if (stochastic && stochastic.k > 80) bearishSignals++;
+    
+    // Williams %R
+    if (williamsR && williamsR.value < -80) bullishSignals++;
+    if (williamsR && williamsR.value > -20) bearishSignals++;
+    
+    // Candlestick patterns
+    const lastCandle = candles.at(-1);
+    const prevCandle = candles.at(-2);
+    
+    // Hammer pattern
+    const isHammer = (lastCandle.close > lastCandle.open) && 
+                     ((lastCandle.close - lastCandle.open) * 2 < (lastCandle.open - lastCandle.low));
+    
+    // Engulfing pattern
+    const isBullishEngulfing = (prevCandle.close < prevCandle.open) && 
+                              (lastCandle.close > lastCandle.open) &&
+                              (lastCandle.open < prevCandle.close) &&
+                              (lastCandle.close > prevCandle.open);
+    
+    const isBearishEngulfing = (prevCandle.close > prevCandle.open) && 
+                              (lastCandle.close < lastCandle.open) &&
+                              (lastCandle.open > prevCandle.close) &&
+                              (lastCandle.close < prevCandle.open);
+    
+    if (isHammer || isBullishEngulfing) bullishSignals += 2;
+    if (isBearishEngulfing) bearishSignals += 2;
+    
+    const strength = Math.max(bullishSignals, bearishSignals) * 20;
+    
+    return {
+        signal: bullishSignals > bearishSignals ? "BULLISH" : bearishSignals > bullishSignals ? "BEARISH" : "NONE",
+        strength: Math.min(strength, 100),
+        isHammer,
+        isBullishEngulfing,
+        isBearishEngulfing,
+        isDivergence: bullishSignals > 0 || bearishSignals > 0
+    };
+}
+
+/**
+ * Phân tích thị trường hàng ngày
+ */
+export async function getDailyMarketAnalysis(symbol) {
+    try {
+        const candles = await getCandles(symbol, "1D", 30);
+        if (!candles || candles.length < 20) return null;
+        
+        const closes = candles.map(c => c.close);
+        const ema20 = calcEMA(closes, 20).at(-1);
+        const ema50 = calcEMA(closes, 50).at(-1);
+        const currentPrice = closes.at(-1);
+        
+        const rsi = calcRSI(candles, 14);
+        const atr = calcATR(candles, 14);
+        
+        // Phân tích xu hướng
+        let trend = "NEUTRAL";
+        let confidence = 50;
+        
+        if (currentPrice > ema20 && ema20 > ema50) {
+            trend = "BULLISH";
+            confidence = 75;
+        } else if (currentPrice < ema20 && ema20 < ema50) {
+            trend = "BEARISH";
+            confidence = 75;
+        }
+        
+        // Điều chỉnh confidence dựa trên RSI
+        if (trend === "BULLISH" && rsi > 70) confidence -= 20;
+        if (trend === "BEARISH" && rsi < 30) confidence -= 20;
+        
+        // Phân tích rủi ro
+        const volatility = atr / currentPrice;
+        let riskLevel = "LOW";
+        if (volatility > 0.05) riskLevel = "HIGH";
+        else if (volatility > 0.03) riskLevel = "MEDIUM";
+        
+        return {
+            recommendation: {
+                direction: trend,
+                confidence: Math.max(confidence, 30)
+            },
+            risk: {
+                riskLevel,
+                volatility,
+                priceChange: (currentPrice - closes.at(-2)) / closes.at(-2)
+            }
+        };
+        
+    } catch (error) {
+        console.error(`Lỗi phân tích thị trường cho ${symbol}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Phát hiện rủi ro crash
+ */
+export function detectCrashRisk(candles) {
+    if (candles.length < 20) return null;
+    
+    const closes = candles.map(c => c.close);
+    const recentPrices = closes.slice(-10);
+    const olderPrices = closes.slice(-20, -10);
+    
+    const recentAvg = recentPrices.reduce((sum, price) => sum + price, 0) / recentPrices.length;
+    const olderAvg = olderPrices.reduce((sum, price) => sum + price, 0) / olderPrices.length;
+    
+    const priceChange = (recentAvg - olderAvg) / olderAvg;
+    const volatility = calcATR(candles.slice(-10), 10) / recentAvg;
+    
+    let riskScore = 0;
+    
+    // Giảm giá mạnh
+    if (priceChange < -0.1) riskScore += 40;
+    else if (priceChange < -0.05) riskScore += 20;
+    
+    // Biến động cao
+    if (volatility > 0.08) riskScore += 30;
+    else if (volatility > 0.05) riskScore += 15;
+    
+    // Volume spike (simplified)
+    const volumes = candles.map(c => c.volume || 0);
+    const avgVolume = volumes.slice(-20).reduce((sum, vol) => sum + vol, 0) / 20;
+    const recentVolume = volumes.slice(-5).reduce((sum, vol) => sum + vol, 0) / 5;
+    
+    if (recentVolume > avgVolume * 2) riskScore += 20;
+    else if (recentVolume > avgVolume * 1.5) riskScore += 10;
+    
+    let riskLevel = "LOW";
+    if (riskScore > 60) riskLevel = "HIGH";
+    else if (riskScore > 30) riskLevel = "MEDIUM";
+    
+    return {
+        riskLevel,
+        riskScore: Math.min(riskScore, 100),
+        volatility,
+        priceChange
+    };
 }

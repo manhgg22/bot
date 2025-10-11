@@ -1,48 +1,235 @@
 // indicators.js
 import { getCandles, getCurrentPrice } from "./okx.js";
-import { findOrderBlock, detectBOS } from "./smc.js";
+import { findOrderBlock, detectBOS, findSwingPoints } from "./smc.js";
 import { getOpenTrades, closeTrade } from "./tradeManager.js";
 import { filterHighQualitySignals, generateSignalReport } from "./signalFilter.js";
 
-/* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO (KHÔNG THAY ĐỔI) ============== */
-export function calcEMA(values, period) { const k = 2 / (period + 1); return values.reduce((acc, price, i) => { if (i === 0) return [price]; const ema = price * k + acc[i - 1] * (1 - k); acc.push(ema); return acc; }, []); }
-export function calcRSI(candles, period = 14) { if (candles.length < period + 1) return 50; let gains = 0, losses = 0; for (let i = 1; i <= period; i++) { const diff = candles[i].close - candles[i - 1].close; if (diff >= 0) gains += diff; else losses -= diff; } let avgGain = gains / period; let avgLoss = losses / period; const rsiArr = []; for (let i = period; i < candles.length; i++) { const rs = avgLoss === 0 ? 100 : avgGain / avgLoss; rsiArr.push(100 - 100 / (1 + rs)); const diff = candles[i].close - candles[i - 1].close; if (diff >= 0) { avgGain = (avgGain * (period - 1) + diff) / period; avgLoss = (avgLoss * (period - 1)) / period; } else { avgGain = (avgGain * (period - 1)) / period; avgLoss = (avgLoss * (period - 1) - diff) / period; } } return rsiArr.at(-1); }
-export function calcATR(candles, period = 14) { if (candles.length < period + 2) return 0; const trs = []; for (let i = 1; i < candles.length; i++) { const h = candles[i].high; const l = candles[i].low; const pc = candles[i - 1].close; const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)); trs.push(tr); } const atr = trs.slice(-period).reduce((a, b) => a + b, 0) / period; return atr; }
-export function calcBollingerBands(candles, period = 20, stdDev = 2) { if (candles.length < period) return null; const closes = candles.map(c => c.close); const sma = closes.slice(-period).reduce((sum, val) => sum + val, 0) / period; const standardDeviation = Math.sqrt( closes.slice(-period).map(val => (val - sma) ** 2).reduce((sum, val) => sum + val, 0) / period ); return { upper: sma + stdDev * standardDeviation, middle: sma, lower: sma - stdDev * standardDeviation }; }
-export function calcAvgVolume(candles, period = 20) { if (candles.length < period) return 0; const volumes = candles.map(c => c.volume || 0); return volumes.slice(-period).reduce((sum, val) => sum + val, 0) / period; }
-function calcADX(candles, period = 14) { if (candles.length < period * 2) return { adx: 0 }; let trs = [], pdms = [], mdms = []; for (let i = 1; i < candles.length; i++) { const C = candles[i], P = candles[i - 1]; trs.push(Math.max(C.high - C.low, Math.abs(C.high - P.close), Math.abs(C.low - P.close))); const upMove = C.high - P.high; const downMove = P.low - C.low; pdms.push((upMove > downMove && upMove > 0) ? upMove : 0); mdms.push((downMove > upMove && downMove > 0) ? downMove : 0); } const ema = (data, p) => { let results = [data.slice(0, p).reduce((a, b) => a + b, 0) / p]; for (let i = p; i < data.length; i++) { results.push((results[results.length - 1] * (p - 1) + data[i]) / p); } return results; }; const smoothedTR = ema(trs, period); const smoothedPDM = ema(pdms, period); const smoothedMDM = ema(mdms, period); let dx = []; for (let i = 0; i < smoothedTR.length; i++) { const pdi_val = smoothedTR[i] === 0 ? 0 : (smoothedPDM[i] / smoothedTR[i]) * 100; const mdi_val = smoothedTR[i] === 0 ? 0 : (smoothedMDM[i] / smoothedTR[i]) * 100; const di_sum = pdi_val + mdi_val; dx.push(di_sum === 0 ? 0 : (Math.abs(pdi_val - mdi_val) / di_sum) * 100); } const adx = ema(dx.slice(period - 1), period); return { adx: adx.at(-1) || 0 }; }
-export function findFVG(candles, direction = "BULLISH") { /* ... giữ nguyên code cũ ... */ }
-export async function getDailyBias(symbol) { /* ... giữ nguyên code cũ ... */ }
-async function getHTFBOS(symbol, bias) { /* ... giữ nguyên code cũ ... */ }
-async function getLTFEntry(symbol, bias) { /* ... giữ nguyên code cũ ... */ }
+/* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO ============== */
+
+export function calcEMA(values, period) {
+    const k = 2 / (period + 1);
+    return values.reduce((acc, price, i) => {
+        if (i === 0) return [price];
+        const ema = price * k + acc[i - 1] * (1 - k);
+        acc.push(ema);
+        return acc;
+    }, []);
+}
+
+export function calcRSI(candles, period = 14) {
+    if (candles.length < period + 1) return 50;
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= period; i++) {
+        const diff = candles[i].close - candles[i - 1].close;
+        if (diff >= 0) gains += diff; else losses -= diff;
+    }
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+    const rsiArr = [];
+    for (let i = period; i < candles.length; i++) {
+        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        rsiArr.push(100 - 100 / (1 + rs));
+        const diff = candles[i].close - candles[i - 1].close;
+        if (diff >= 0) {
+            avgGain = (avgGain * (period - 1) + diff) / period;
+            avgLoss = (avgLoss * (period - 1)) / period;
+        } else {
+            avgGain = (avgGain * (period - 1)) / period;
+            avgLoss = (avgLoss * (period - 1) - diff) / period;
+        }
+    }
+    return rsiArr.at(-1);
+}
+
+export function calcATR(candles, period = 14) {
+    if (candles.length < period + 2) return 0;
+    const trs = [];
+    for (let i = 1; i < candles.length; i++) {
+        const h = candles[i].high;
+        const l = candles[i].low;
+        const pc = candles[i - 1].close;
+        const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+        trs.push(tr);
+    }
+    const atr = trs.slice(-period).reduce((a, b) => a + b, 0) / period;
+    return atr;
+}
+
+export function calcBollingerBands(candles, period = 20, stdDev = 2) {
+    if (candles.length < period) return null;
+    const closes = candles.map(c => c.close);
+    const sma = closes.slice(-period).reduce((sum, val) => sum + val, 0) / period;
+    const standardDeviation = Math.sqrt(
+        closes.slice(-period).map(val => (val - sma) ** 2).reduce((sum, val) => sum + val, 0) / period
+    );
+    return {
+        upper: sma + stdDev * standardDeviation,
+        middle: sma,
+        lower: sma - stdDev * standardDeviation,
+    };
+}
+
+export function calcAvgVolume(candles, period = 20) {
+    if (candles.length < period) return 0;
+    const volumes = candles.map(c => c.volume || 0);
+    return volumes.slice(-period).reduce((sum, val) => sum + val, 0) / period;
+}
+
+function calcADX(candles, period = 14) {
+    if (candles.length < period * 2) return { adx: 0 };
+    let trs = [], pdms = [], mdms = [];
+    for (let i = 1; i < candles.length; i++) {
+        const C = candles[i], P = candles[i - 1];
+        trs.push(Math.max(C.high - C.low, Math.abs(C.high - P.close), Math.abs(C.low - P.close)));
+        const upMove = C.high - P.high;
+        const downMove = P.low - C.low;
+        pdms.push((upMove > downMove && upMove > 0) ? upMove : 0);
+        mdms.push((downMove > upMove && downMove > 0) ? downMove : 0);
+    }
+    const ema = (data, p) => {
+        let results = [data.slice(0, p).reduce((a, b) => a + b, 0) / p];
+        for (let i = p; i < data.length; i++) {
+            results.push((results[results.length - 1] * (p - 1) + data[i]) / p);
+        }
+        return results;
+    };
+    const smoothedTR = ema(trs, period);
+    const smoothedPDM = ema(pdms, period);
+    const smoothedMDM = ema(mdms, period);
+    let dx = [];
+    for (let i = 0; i < smoothedTR.length; i++) {
+        const pdi_val = smoothedTR[i] === 0 ? 0 : (smoothedPDM[i] / smoothedTR[i]) * 100;
+        const mdi_val = smoothedTR[i] === 0 ? 0 : (smoothedMDM[i] / smoothedTR[i]) * 100;
+        const di_sum = pdi_val + mdi_val;
+        dx.push(di_sum === 0 ? 0 : (Math.abs(pdi_val - mdi_val) / di_sum) * 100);
+    }
+    const adx = ema(dx.slice(period - 1), period);
+    return { adx: adx.at(-1) || 0 };
+}
+
+/**
+ * [MỚI] Hàm tính toán chỉ báo Stochastic RSI.
+ */
+function calcStochRSI(candles, rsiPeriod = 14, stochPeriod = 14, kPeriod = 3, dPeriod = 3) {
+    if (candles.length < rsiPeriod + stochPeriod) {
+        return null;
+    }
+    const rsiValues = [];
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= rsiPeriod; i++) {
+        const diff = candles[i].close - candles[i - 1].close;
+        if (diff >= 0) gains += diff; else losses -= diff;
+    }
+    let avgGain = gains / rsiPeriod;
+    let avgLoss = losses / rsiPeriod;
+    for (let i = rsiPeriod; i < candles.length; i++) {
+        const diff = candles[i].close - candles[i - 1].close;
+        if (diff >= 0) {
+            avgGain = (avgGain * (rsiPeriod - 1) + diff) / rsiPeriod;
+            avgLoss = (avgLoss * (rsiPeriod - 1)) / rsiPeriod;
+        } else {
+            avgGain = (avgGain * (rsiPeriod - 1)) / rsiPeriod;
+            avgLoss = (avgLoss * (rsiPeriod - 1) - diff) / rsiPeriod;
+        }
+        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        rsiValues.push(100 - 100 / (1 + rs));
+    }
+    
+    if (rsiValues.length < stochPeriod) return null;
+
+    const stochRSI_K = [];
+    for (let i = stochPeriod - 1; i < rsiValues.length; i++) {
+        const rsiSlice = rsiValues.slice(i - stochPeriod + 1, i + 1);
+        const lowestRSI = Math.min(...rsiSlice);
+        const highestRSI = Math.max(...rsiSlice);
+        const currentRSI = rsiValues[i];
+        const k = (highestRSI === lowestRSI) ? 100 : ((currentRSI - lowestRSI) / (highestRSI - lowestRSI)) * 100;
+        stochRSI_K.push(k);
+    }
+    
+    if (stochRSI_K.length < dPeriod) return null;
+    
+    const smoothK = [];
+    for(let i = kPeriod - 1; i < stochRSI_K.length; i++) {
+        const kSlice = stochRSI_K.slice(i - kPeriod + 1, i + 1);
+        smoothK.push(kSlice.reduce((a,b) => a+b, 0) / kPeriod);
+    }
+
+    const smoothD = [];
+    for(let i = dPeriod - 1; i < smoothK.length; i++) {
+        const dSlice = smoothK.slice(i - dPeriod + 1, i + 1);
+        smoothD.push(dSlice.reduce((a,b) => a+b, 0) / dPeriod);
+    }
+
+    return {
+        k: smoothK.at(-1),
+        d: smoothD.at(-1),
+        prev_k: smoothK.at(-2),
+        prev_d: smoothD.at(-2)
+    };
+}
+
+/* ============== CÁC HÀM PHÂN TÍCH PHỤ ============== */
+
+export async function getDailyBias(symbol) {
+    const daily = await getCandles(symbol, "1D", 150);
+    if (!daily || daily.length < 51) return "NEUTRAL";
+    const closes = daily.map(c => c.close);
+    const ema50 = calcEMA(closes, 50).at(-1);
+    const lastClose = closes.at(-1);
+    return lastClose > ema50 ? "BULLISH" : "BEARISH";
+}
+
+async function getHTFBOS(symbol, bias) {
+    const h1_candles = await getCandles(symbol, "1H", 200);
+    if (!h1_candles || h1_candles.length < 50) return { bosH1: false };
+    const bosH1 = detectBOS(h1_candles, bias);
+    return { bosH1 };
+}
+
+async function getLTFEntry(symbol, bias) {
+    const m15_candles = await getCandles(symbol, "15m", 220);
+    if (!m15_candles || m15_candles.length < 50) return null;
+    const price = m15_candles.at(-1).close;
+    const rsi = calcRSI(m15_candles, 14);
+    const ob = findOrderBlock(m15_candles, bias);
+    const fvg = findFVG(m15_candles, bias);
+    const retestOb = ob ? (price >= ob.low && price <= ob.high) : false;
+    const retestFvg = fvg ? (price >= fvg.low && price <= fvg.high) : false;
+    const rsiOk = (bias === "BULLISH") ? rsi >= 45 : rsi <= 55;
+    const atr = calcATR(m15_candles, 14);
+    if (!atr) return null;
+    let sl, tp;
+    const ATR_SL = 1.5, ATR_TP = 3.0;
+    if (bias === "BULLISH") {
+        sl = ob ? Math.min(ob.low, price - ATR_SL * atr) : price - ATR_SL * atr;
+        tp = price + ATR_TP * atr;
+    } else {
+        sl = ob ? Math.max(ob.high, price + ATR_SL * atr) : price + ATR_SL * atr;
+        tp = price - ATR_TP * atr;
+    }
+    return { price, retestOb, retestFvg, rsiOk, tp, sl };
+}
 
 /* ============== CÁC CHIẾN LƯỢC TÌM TÍN HIỆU ============== */
 
-/**
- * [SỬA LỖI] Bổ sung kiểm tra null/undefined để đảm bảo hàm luôn ổn định.
- * Nếu một chiến lược trả về kết quả không hợp lệ, nó sẽ được xử lý an toàn.
- */
 async function findSignalWithADX(symbol, strategyFn) {
     const signal = await strategyFn(symbol);
-    
-    // Nếu signal không hợp lệ (null/undefined), trả về đối tượng mặc định ngay lập tức
     if (!signal) {
         return { direction: "NONE" };
     }
-    
     if (signal.direction !== "NONE") {
         const adxCandles = await getCandles(symbol, '1H', 50);
         if (adxCandles && adxCandles.length > 0) {
             const { adx } = calcADX(adxCandles, 14);
             signal.adx = adx;
         } else {
-            signal.adx = 0; // Gán giá trị an toàn
+            signal.adx = 0;
         }
     }
     return signal;
 }
 
-// [SỬA LỖI] Đảm bảo tất cả các hàm chiến lược luôn trả về một object hợp lệ
 async function getSignalsSMC(symbol) { 
     try {
         const dailyBias = await getDailyBias(symbol); 
@@ -59,6 +246,7 @@ async function getSignalsSMC(symbol) {
         return { direction: "NONE" };
     }
 }
+
 async function getSignalsEMACross(symbol) { 
     try {
         const candles = await getCandles(symbol, "1H", 250); 
@@ -82,6 +270,7 @@ async function getSignalsEMACross(symbol) {
         return { direction: "NONE" };
     }
 }
+
 async function getSignalsBollingerBreakout(symbol) {
     try {
         const candles = await getCandles(symbol, "1H", 50);
@@ -108,9 +297,44 @@ async function getSignalsBollingerBreakout(symbol) {
     }
 }
 
-// [NÂNG CẤP] Sử dụng hệ thống lọc tín hiệu chất lượng cao
+async function getSignalsStochRSIReversal(symbol) {
+    try {
+        const candles = await getCandles(symbol, "4H", 100);
+        if (!candles || candles.length < 50) return { direction: "NONE" };
+        
+        const stochRSI = calcStochRSI(candles);
+        if (!stochRSI) return { direction: "NONE" };
+
+        const { k, d, prev_k, prev_d } = stochRSI;
+        const oversoldLevel = 20;
+        const overboughtLevel = 80;
+
+        const isLongSignal = prev_k < oversoldLevel && k > oversoldLevel && k > d;
+        const isShortSignal = prev_k > overboughtLevel && k < overboughtLevel && k < d;
+
+        if (isLongSignal || isShortSignal) {
+            const lastCandle = candles.at(-1);
+            const atr = calcATR(candles, 14);
+            if (!atr) return { direction: "NONE" };
+            const direction = isLongSignal ? "LONG" : "SHORT";
+            const sl = isLongSignal ? lastCandle.close - 1.5 * atr : lastCandle.close + 1.5 * atr;
+            const tp = isLongSignal ? lastCandle.close + 3.0 * atr : lastCandle.close - 3.0 * atr;
+            return { strategy: "STOCH_RSI_REVERSAL", direction, price: lastCandle.close, tp, sl };
+        }
+        return { direction: "NONE" };
+    } catch (error) {
+        return { direction: "NONE" };
+    }
+}
+
+// [NÂNG CẤP] Sử dụng hệ thống lọc tín hiệu chất lượng cao với StochRSI
 export async function getAllSignalsForSymbol(symbol) {
-    const strategies = [getSignalsSMC, getSignalsEMACross, getSignalsBollingerBreakout];
+    const strategies = [
+        getSignalsStochRSIReversal, 
+        getSignalsSMC, 
+        getSignalsEMACross, 
+        getSignalsBollingerBreakout
+    ];
     const allSignals = [];
     
     // Thu thập tất cả tín hiệu từ các chiến lược
@@ -139,9 +363,22 @@ export async function getAllSignalsForSymbol(symbol) {
     return { direction: "NONE" };
 }
 
+/* ============== CÁC HÀM QUẢN LÝ VÀ QUÉT CHÍNH ============== */
 
-/* ============== CÁC HÀM QUẢN LÝ VÀ QUÉT CHÍNH (KHÔNG THAY ĐỔI) ============== */
-export async function monitorOpenTrades(bot, chatId) { /* ... giữ nguyên code cũ ... */ }
+export async function monitorOpenTrades(bot, chatId) {
+    const openTrades = getOpenTrades();
+    if (openTrades.length === 0) return;
+    console.log(`[REAL-TIME MONITOR] Đang kiểm tra ${openTrades.length} lệnh đang mở...`);
+    for (const trade of openTrades) {
+        const currentPrice = await getCurrentPrice(trade.symbol);
+        if (currentPrice === null) continue;
+        if ((trade.direction === "LONG" && currentPrice >= trade.tp) || (trade.direction === "SHORT" && currentPrice <= trade.tp)) { bot.sendMessage(chatId, `✅ [TAKE PROFIT] ${trade.symbol}: Giá chạm TP (${trade.tp}). Đóng lệnh ${trade.direction}.`); closeTrade(trade.symbol, bot, chatId, "Hit TP"); continue; }
+        if ((trade.direction === "LONG" && currentPrice <= trade.sl) || (trade.direction === "SHORT" && currentPrice >= trade.sl)) { bot.sendMessage(chatId, `❌ [STOP LOSS] ${trade.symbol}: Giá chạm SL (${trade.sl}). Đóng lệnh ${trade.direction}.`); closeTrade(trade.symbol, bot, chatId, "Hit SL"); continue; }
+        let reversalSignal = await getAllSignalsForSymbol(trade.symbol);
+        if (reversalSignal.direction !== "NONE" && reversalSignal.direction !== trade.direction) { const message = `🚨 *[CẢNH BÁO ĐẢO CHIỀU] - ${trade.symbol}*\nLệnh đang mở: *${trade.direction}*\nTín hiệu mới: *${reversalSignal.direction}* (chiến lược ${reversalSignal.strategy})\nGiá hiện tại: ${currentPrice.toFixed(5)}\n\n👉 Bạn nên cân nhắc đóng lệnh *${trade.direction}* hiện tại để tránh rủi ro.\nĐể đóng lệnh, dùng lệnh: \`/close ${trade.symbol}\``; bot.sendMessage(chatId, message, { parse_mode: "Markdown" }); }
+    }
+}
+
 export async function scanForNewSignal(symbol, bot, chatId) {
   try {
     const openTrade = getOpenTrades().find(t => t.symbol === symbol);
