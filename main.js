@@ -5,6 +5,7 @@ import TelegramBot from "node-telegram-bot-api";
 import axios from "axios";
 import cron from "node-cron";
 import { scanForNewSignal, monitorOpenTrades, getAllSignalsForSymbol } from "./indicators.js";
+import { filterHighQualitySignals } from "./signalFilter.js";
 import { addTrade, closeTrade, getOpenTrades, getTradeStats } from "./tradeManager.js";
 import { getCurrentPrice } from "./okx.js";
 
@@ -43,7 +44,7 @@ const menuOptions = {
       ["/status", "/positions", "/stats"],
       ["/scan_top_100", "/scan_all_coins"],
       ["💡 Gợi ý LONG", "💡 Gợi ý SHORT"],
-      ["/theodoi"],
+      ["/theodoi", "/quality"],
     ],
     resize_keyboard: true,
   },
@@ -60,40 +61,139 @@ bot.onText(/\/scan_top_100/, async (msg) => { if (isScanning) return bot.sendMes
 bot.onText(/\/scan_all_coins/, async (msg) => { if (isScanning) return bot.sendMessage(msg.chat.id, "⚠️ Bot đang bận quét, vui lòng chờ."); bot.sendMessage(msg.chat.id, "⏳ Bắt đầu quét TOÀN BỘ coin..."); const symbols = await getSymbols(null); if (symbols.length > 0) { bot.sendMessage(msg.chat.id, `🔎 Tìm thấy ${symbols.length} coin. Bắt đầu quét...`); const signalCount = await scanAll(symbols, 'manual_full', msg.chat.id); bot.sendMessage(msg.chat.id, `✅ Đã quét xong ${symbols.length} coin! Tìm thấy ${signalCount} tín hiệu.`); } else { bot.sendMessage(msg.chat.id, "⚠️ Lỗi: Không thể lấy danh sách toàn bộ coin."); } });
 bot.onText(/\/stats/, (msg) => { const statsMessage = getTradeStats(); bot.sendMessage(msg.chat.id, statsMessage, { parse_mode: "Markdown" }); });
 bot.onText(/\/theodoi/, async (msg) => { const trades = getOpenTrades(); if (trades.length === 0) { return bot.sendMessage(msg.chat.id, "📭 Bạn không có lệnh nào đang được theo dõi."); } bot.sendMessage(msg.chat.id, "🔍 Đang kiểm tra trạng thái các lệnh..."); let reportMessage = "📊 *BÁO CÁO TRẠNG THÁI LỆNH* 📊\n\n"; const pricePromises = trades.map(trade => getCurrentPrice(trade.symbol)); const currentPrices = await Promise.all(pricePromises); trades.forEach((trade, index) => { const currentPrice = currentPrices[index]; if (currentPrice === null) { reportMessage += `*${trade.symbol}* | ${trade.direction}\n- Không thể lấy giá hiện tại.\n\n`; return; } let pnlPercent = 0; if (trade.direction === 'LONG') { pnlPercent = ((currentPrice - trade.entry) / trade.entry) * 100; } else { pnlPercent = ((trade.entry - currentPrice) / trade.entry) * 100; } const statusIcon = pnlPercent >= 0 ? '🟢' : '🔴'; const formattedPnl = pnlPercent.toFixed(2); reportMessage += `${statusIcon} *${trade.symbol}* | ${trade.direction}\n`; reportMessage += `- Entry: \`${trade.entry}\`\n`; reportMessage += `- Giá hiện tại: \`${currentPrice}\`\n`; reportMessage += `- Lãi/Lỗ: *${formattedPnl}%*\n\n`; }); bot.sendMessage(msg.chat.id, reportMessage, { parse_mode: "Markdown" }); });
+bot.onText(/\/quality/, (msg) => { 
+    const qualityMessage = `
+🎯 *THIẾT LẬP CHẤT LƯỢNG TÍN HIỆU*
+
+📊 *Ngưỡng điểm số hiện tại:*
+• Tín hiệu tự động: ≥70 điểm
+• Gợi ý LONG/SHORT: ≥75 điểm
+
+🔧 *Các lệnh điều chỉnh:*
+• \`/set_quality_auto [điểm]\` - Đặt ngưỡng tín hiệu tự động
+• \`/set_quality_suggest [điểm]\` - Đặt ngưỡng gợi ý
+• \`/quality_info\` - Xem thông tin chi tiết về hệ thống chấm điểm
+
+💡 *Gợi ý:*
+• 60-70: Chất lượng trung bình
+• 70-80: Chất lượng tốt  
+• 80-90: Chất lượng cao
+• 90+: Chất lượng xuất sắc
+`;
+    bot.sendMessage(msg.chat.id, qualityMessage, { parse_mode: "Markdown" });
+});
+
+bot.onText(/\/set_quality_auto (.+)/, (msg, match) => {
+    const threshold = parseInt(match[1]);
+    if (threshold >= 50 && threshold <= 95) {
+        process.env.QUALITY_THRESHOLD_AUTO = threshold;
+        bot.sendMessage(msg.chat.id, `✅ Đã đặt ngưỡng tín hiệu tự động: ${threshold} điểm`);
+    } else {
+        bot.sendMessage(msg.chat.id, "❌ Ngưỡng phải từ 50-95 điểm");
+    }
+});
+
+bot.onText(/\/set_quality_suggest (.+)/, (msg, match) => {
+    const threshold = parseInt(match[1]);
+    if (threshold >= 60 && threshold <= 95) {
+        process.env.QUALITY_THRESHOLD_SUGGEST = threshold;
+        bot.sendMessage(msg.chat.id, `✅ Đã đặt ngưỡng gợi ý: ${threshold} điểm`);
+    } else {
+        bot.sendMessage(msg.chat.id, "❌ Ngưỡng phải từ 60-95 điểm");
+    }
+});
+
+bot.onText(/\/quality_info/, (msg) => {
+    const infoMessage = `
+📈 *HỆ THỐNG CHẤM ĐIỂM TÍN HIỆU NÂNG CAO*
+
+🎯 *Các tiêu chí đánh giá:*
+• ADX (15%): Độ mạnh xu hướng
+• Cấu trúc thị trường (15%): Phân tích swing points
+• EMA Alignment (10%): Sự đồng thuận của EMA
+• Volume (10%): Xác nhận khối lượng
+• Momentum (10%): Động lượng giá
+• Key Levels (10%): Hỗ trợ/kháng cự
+• **Chỉ báo nâng cao (30%)**: MACD, Stochastic, Williams %R, MFI, CCI, Parabolic SAR, Ichimoku
+
+🔍 *Phân tích cấu trúc:*
+• Higher Highs/Lower Lows: Xu hướng rõ ràng
+• Sideways: Thị trường đi ngang (loại bỏ)
+• EMA slope: Hướng xu hướng
+
+📊 *Điều kiện bắt buộc:*
+• ADX ≥ 20
+• Cấu trúc phù hợp với hướng tín hiệu
+• Volume ≥ 1.5x trung bình
+• **≥3 chỉ báo nâng cao đồng thuận**
+
+🔥 *Chỉ báo nâng cao:*
+• MACD: Giao cắt và histogram
+• Stochastic: Overbought/Oversold
+• Williams %R: Momentum ngắn hạn
+• MFI: Money Flow Index
+• CCI: Commodity Channel Index
+• Parabolic SAR: Xác nhận xu hướng
+• Ichimoku: Cloud analysis
+
+💡 *Kết quả:* Chỉ những tín hiệu có nhiều chỉ báo đồng thuận mới được gửi, giảm thiểu tối đa nhiễu và false signals.
+`;
+    bot.sendMessage(msg.chat.id, infoMessage, { parse_mode: "Markdown" });
+});
+
 bot.onText(/💡 Gợi ý LONG/, (msg) => { handleSuggestionRequest(msg.chat.id, "LONG"); });
 bot.onText(/💡 Gợi ý SHORT/, (msg) => { handleSuggestionRequest(msg.chat.id, "SHORT"); });
 
 async function handleSuggestionRequest(chatId, direction) {
     if (isScanning) { return bot.sendMessage(chatId, "⚠️ Bot đang bận quét, vui lòng thử lại sau."); }
-    bot.sendMessage(chatId, `🔍 Đang tìm các tín hiệu ${direction} tốt nhất trên thị trường Futures...`);
+    bot.sendMessage(chatId, `🔍 Đang tìm các tín hiệu ${direction} CHẤT LƯỢNG CAO trên thị trường Futures...`);
     isScanning = true;
     try {
         const allSymbols = await getSymbols(null);
         if (!allSymbols || allSymbols.length === 0) { bot.sendMessage(chatId, "⚠️ Lỗi: Không thể lấy danh sách coin Futures."); return; }
+        
         let suggestions = [];
         const totalSymbols = allSymbols.length;
+        
         for (let i = 0; i < totalSymbols; i++) {
             const symbol = allSymbols[i];
             console.log(`[SUGGEST] Đang quét (${i+1}/${totalSymbols}): ${symbol}`);
             if (symbol.includes('USDC')) continue;
+            
             const signal = await getAllSignalsForSymbol(symbol);
-            if (signal.direction === direction) {
-                signal.symbol = symbol;
+            if (signal.direction === direction && signal.score >= 70) {
                 suggestions.push(signal);
             }
             await sleep(150);
         }
-        if (suggestions.length === 0) { bot.sendMessage(chatId, `✅ Đã quét xong. Không tìm thấy gợi ý ${direction} nào phù hợp.`); return; }
-        suggestions.sort((a, b) => b.adx - a.adx);
-        const topSuggestions = suggestions.slice(0, 5);
-        let reportMessage = `📈 *TOP 5 GỢI Ý ${direction} TIỀM NĂNG NHẤT*\n_(Sắp xếp theo Độ an toàn giảm dần)_\n\n`;
-        topSuggestions.forEach(sig => {
-            const safetyLevel = sig.adx > 25 ? 'CAO' : (sig.adx >= 20 ? 'TRUNG BÌNH' : 'THẤP');
-            const safetyIcon = sig.adx > 25 ? '✅' : (sig.adx >= 20 ? '⚠️' : '❌');
-            reportMessage += `*${sig.symbol}* - (Chiến lược: ${sig.strategy})\n`;
-            reportMessage += `${safetyIcon} Độ an toàn (ADX): *${sig.adx.toFixed(1)}* (${safetyLevel})\n`;
-            reportMessage += `Giá: ${sig.price.toFixed(4)}, TP: ${sig.tp.toFixed(4)}, SL: ${sig.sl.toFixed(4)}\n\n`;
+        
+        if (suggestions.length === 0) { 
+            bot.sendMessage(chatId, `✅ Đã quét xong. Không tìm thấy gợi ý ${direction} nào đạt tiêu chuẩn chất lượng cao (≥70 điểm).`); 
+            return; 
+        }
+        
+        // Lọc và sắp xếp theo điểm số chất lượng
+        const suggestThreshold = parseInt(process.env.QUALITY_THRESHOLD_SUGGEST) || 75;
+        const filteredSuggestions = await filterHighQualitySignals(suggestions, suggestThreshold);
+        const topSuggestions = filteredSuggestions.slice(0, 5);
+        
+        let reportMessage = `🔥 *TOP ${topSuggestions.length} GỢI Ý ${direction} CHẤT LƯỢNG CAO*\n_(Sắp xếp theo điểm số giảm dần)_\n\n`;
+        
+        topSuggestions.forEach((sig, index) => {
+            let qualityIcon = '🔥';
+            if (sig.score >= 90) qualityIcon = '🔥🔥🔥';
+            else if (sig.score >= 85) qualityIcon = '🔥🔥';
+            else if (sig.score >= 80) qualityIcon = '🔥';
+            else qualityIcon = '✅';
+            
+            reportMessage += `${index + 1}. *${sig.symbol}* - ${sig.strategy}\n`;
+            reportMessage += `${qualityIcon} Điểm chất lượng: *${sig.score}/100*\n`;
+            reportMessage += `📊 ADX: ${sig.adx.toFixed(1)} | Giá: ${sig.price.toFixed(4)}\n`;
+            reportMessage += `🎯 TP: ${sig.tp.toFixed(4)} | 🛑 SL: ${sig.sl.toFixed(4)}\n\n`;
         });
+        
+        reportMessage += `💡 *Lưu ý:* Chỉ những tín hiệu có điểm ≥75 mới được hiển thị để đảm bảo chất lượng cao nhất.`;
+        
         bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
     } catch(error) {
         console.error("Lỗi khi tìm gợi ý:", error);

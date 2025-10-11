@@ -2,6 +2,7 @@
 import { getCandles, getCurrentPrice } from "./okx.js";
 import { findOrderBlock, detectBOS } from "./smc.js";
 import { getOpenTrades, closeTrade } from "./tradeManager.js";
+import { filterHighQualitySignals, generateSignalReport } from "./signalFilter.js";
 
 /* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO (KHÔNG THAY ĐỔI) ============== */
 export function calcEMA(values, period) { const k = 2 / (period + 1); return values.reduce((acc, price, i) => { if (i === 0) return [price]; const ema = price * k + acc[i - 1] * (1 - k); acc.push(ema); return acc; }, []); }
@@ -107,15 +108,34 @@ async function getSignalsBollingerBreakout(symbol) {
     }
 }
 
-// [SỬA LỖI] Thêm kiểm tra `signal` tồn tại trước khi truy cập thuộc tính
+// [NÂNG CẤP] Sử dụng hệ thống lọc tín hiệu chất lượng cao
 export async function getAllSignalsForSymbol(symbol) {
     const strategies = [getSignalsSMC, getSignalsEMACross, getSignalsBollingerBreakout];
+    const allSignals = [];
+    
+    // Thu thập tất cả tín hiệu từ các chiến lược
     for (const strategyFn of strategies) {
         const signal = await findSignalWithADX(symbol, strategyFn);
-        if (signal && signal.direction !== "NONE") { 
-            return signal;
+        if (signal && signal.direction !== "NONE") {
+            signal.symbol = symbol; // Thêm symbol vào signal
+            allSignals.push(signal);
         }
     }
+    
+    // Nếu không có tín hiệu nào, trả về NONE
+    if (allSignals.length === 0) {
+        return { direction: "NONE" };
+    }
+    
+    // Lọc và chấm điểm tín hiệu chất lượng cao
+    const autoThreshold = parseInt(process.env.QUALITY_THRESHOLD_AUTO) || 70;
+    const filteredSignals = await filterHighQualitySignals(allSignals, autoThreshold);
+    
+    // Trả về tín hiệu tốt nhất (điểm cao nhất)
+    if (filteredSignals.length > 0) {
+        return filteredSignals[0];
+    }
+    
     return { direction: "NONE" };
 }
 
@@ -126,21 +146,44 @@ export async function scanForNewSignal(symbol, bot, chatId) {
   try {
     const openTrade = getOpenTrades().find(t => t.symbol === symbol);
     if (openTrade) return false;
+    
     const signal = await getAllSignalsForSymbol(symbol);
     if (signal.direction !== "NONE") {
-        const safetyLevel = signal.adx > 25 ? 'CAO' : (signal.adx >= 20 ? 'TRUNG BÌNH' : 'THẤP');
-        const safetyIcon = signal.adx > 25 ? '✅' : (signal.adx >= 20 ? '⚠️' : '❌');
+        // Xác định mức độ an toàn dựa trên điểm số
+        let safetyLevel, safetyIcon;
+        if (signal.score >= 85) {
+            safetyLevel = 'RẤT CAO';
+            safetyIcon = '🔥';
+        } else if (signal.score >= 75) {
+            safetyLevel = 'CAO';
+            safetyIcon = '✅';
+        } else if (signal.score >= 70) {
+            safetyLevel = 'TRUNG BÌNH';
+            safetyIcon = '⚠️';
+        } else {
+            safetyLevel = 'THẤP';
+            safetyIcon = '❌';
+        }
+
         const commandDirection = signal.direction.toLowerCase();
         const entryCommand = `\`/${commandDirection} ${symbol} ${signal.price} ${signal.sl}\``;
+        
+        // Tạo báo cáo chi tiết nếu có điểm số
+        const detailedReport = signal.score ? generateSignalReport(signal) : '';
+        
         const message = `
-🔔 *[TÍN HIỆU MỚI - ${signal.strategy}]*
+🔔 *[TÍN HIỆU CHẤT LƯỢNG CAO - ${signal.strategy}]*
 *Symbol:* \`${symbol}\` | *${signal.direction}*
 *Giá hiện tại:* ${signal.price.toFixed(5)}
 🎯 *Take Profit:* ${signal.tp.toFixed(5)}
 🛑 *Stop Loss:* ${signal.sl.toFixed(5)}
-${safetyIcon} *Độ an toàn (ADX):* ${signal.adx.toFixed(1)} (${safetyLevel})
+${safetyIcon} *Điểm chất lượng:* ${signal.score}/100 (${safetyLevel})
+📊 *ADX:* ${signal.adx.toFixed(1)}
+
 Để vào lệnh, hãy dùng lệnh:
 ${entryCommand}
+
+${detailedReport ? detailedReport : ''}
 `;
         bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
         return true;
