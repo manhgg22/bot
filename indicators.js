@@ -2,7 +2,8 @@
 import { getCandles, getCurrentPrice } from "./okx.js";
 import { findOrderBlock, detectBOS, findSwingPoints } from "./smc.js";
 import { getOpenTrades, closeTrade } from "./tradeManager.js";
-import { filterHighQualitySignals, generateSignalReport, analyzeRiskAndExitPoints, generateRiskReport } from "./signalFilter.js";
+import { filterHighQualitySignals, generateSignalReport } from "./signalFilter.js";
+import { analyzeRiskAndExitPoints, generateRiskReport } from "./advancedIndicators.js";
 
 /* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO ============== */
 
