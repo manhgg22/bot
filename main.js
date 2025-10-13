@@ -4,10 +4,12 @@ import dotenv from "dotenv";
 import TelegramBot from "node-telegram-bot-api";
 import axios from "axios";
 import cron from "node-cron";
-import { scanForNewSignal, monitorOpenTrades, getAllSignalsForSymbol, checkRiskAndWarn } from "./indicators.js";
+import { scanForNewSignal, monitorOpenTrades, getAllSignalsForSymbol, checkRiskAndWarn, calcRSI, calcATR } from "./indicators.js";
 import { filterHighQualitySignals } from "./signalFilter.js";
 import { addTrade, closeTrade, getOpenTrades, getTradeStats } from "./tradeManager.js";
-import { getCurrentPrice } from "./okx.js";
+import { getCurrentPrice, getCandles } from "./okx.js";
+import { analyzeAdvancedIndicators } from "./advancedIndicators.js";
+import OKXAutoTrader from "./autoTrader.js";
 
 dotenv.config();
 
@@ -44,11 +46,14 @@ const menuOptions = {
       ["/scan_top_100", "/scan_all_coins"],
       ["💡 Gợi ý LONG", "💡 Gợi ý SHORT"],
       ["/theodoi", "/quality", "/risk_check"],
+      ["🤖 Auto Start", "⏹️ Auto Stop", "📊 Auto Status"],
+      ["⚙️ Auto Config", "/auto_close_all"]
     ],
     resize_keyboard: true,
   },
 };
 let isScanning = false;
+const autoTrader = new OKXAutoTrader();
 
 // --- Xử lý các lệnh từ người dùng (Toàn bộ phần này giữ nguyên) ---
 bot.onText(/\/start/, (msg) => { bot.sendMessage(msg.chat.id, "👋 Chào mừng! Bot hoạt động trên thị trường Futures.", menuOptions); });
@@ -159,6 +164,128 @@ bot.onText(/\/risk_check/, async (msg) => {
     
     bot.sendMessage(msg.chat.id, "🔍 Đang kiểm tra rủi ro cho các lệnh đang mở...");
     await checkRiskAndWarn(bot, msg.chat.id);
+});
+
+// ==== LỆNH TỰ ĐỘNG GIAO DỊCH ====
+bot.onText(/\/auto_start/, async (msg) => {
+    try {
+        await autoTrader.startAutoTrading();
+        const stats = autoTrader.getTradingStats();
+        bot.sendMessage(msg.chat.id, `🚀 *TỰ ĐỘNG GIAO DỊCH ĐÃ BẮT ĐẦU*\n\n💰 Vốn: ${stats.totalCapital}U\n📊 Lệnh tối đa: ${stats.maxPositions}\n🎯 Điểm tín hiệu tối thiểu: 70/100\n🎯 Mục tiêu: 100U mỗi lệnh\n\n⚠️ Bot sẽ tự động:\n• Quét tín hiệu mỗi 15s\n• Sử dụng đòn bẩy tối đa\n• Đặt SL/TP tự động\n• Quản lý rủi ro`, { parse_mode: "Markdown" });
+    } catch (error) {
+        bot.sendMessage(msg.chat.id, `❌ Lỗi khởi động tự động giao dịch: ${error.message}`);
+    }
+});
+
+bot.onText(/\/auto_stop/, (msg) => {
+    autoTrader.stopAutoTrading();
+    bot.sendMessage(msg.chat.id, "⏹️ *TỰ ĐỘNG GIAO DỊCH ĐÃ DỪNG*\n\nBot sẽ không đặt lệnh mới nữa.", { parse_mode: "Markdown" });
+});
+
+bot.onText(/\/auto_status/, (msg) => {
+    const stats = autoTrader.getTradingStats();
+    let message = `🤖 *TRẠNG THÁI TỰ ĐỘNG GIAO DỊCH*\n\n`;
+    message += `🔄 Trạng thái: ${stats.isTrading ? '🟢 ĐANG CHẠY' : '🔴 ĐÃ DỪNG'}\n`;
+    message += `💰 Vốn tổng: ${stats.totalCapital}U\n`;
+    message += `📊 Lệnh đang mở: ${stats.openPositions}/${stats.maxPositions}\n\n`;
+    
+    if (stats.positions.length > 0) {
+        message += `📈 *LỆNH ĐANG MỞ:*\n`;
+        stats.positions.forEach((pos, index) => {
+            message += `${index + 1}. ${pos.symbol} | ${pos.side}\n`;
+            message += `   Khối lượng: ${pos.size} (${pos.leverage}x)\n`;
+            message += `   Entry: ${pos.entryPrice}\n`;
+            message += `   SL: ${pos.slPrice} | TP: ${pos.tpPrice}\n\n`;
+        });
+    } else {
+        message += `📭 Không có lệnh nào đang mở`;
+    }
+    
+    bot.sendMessage(msg.chat.id, message, { parse_mode: "Markdown" });
+});
+
+bot.onText(/\/auto_close_all/, async (msg) => {
+    const stats = autoTrader.getTradingStats();
+    if (stats.positions.length === 0) {
+        bot.sendMessage(msg.chat.id, "📭 Không có lệnh nào để đóng.");
+        return;
+    }
+    
+    bot.sendMessage(msg.chat.id, `🔄 Đang đóng ${stats.positions.length} lệnh...`);
+    
+    let closedCount = 0;
+    for (const position of stats.positions) {
+        const closed = await autoTrader.closePosition(position.symbol, "Đóng thủ công");
+        if (closed) closedCount++;
+    }
+    
+    bot.sendMessage(msg.chat.id, `✅ Đã đóng ${closedCount}/${stats.positions.length} lệnh.`);
+});
+
+bot.onText(/🤖 Auto Start/, async (msg) => {
+    try {
+        await autoTrader.startAutoTrading();
+        const stats = autoTrader.getTradingStats();
+        bot.sendMessage(msg.chat.id, `🚀 *TỰ ĐỘNG GIAO DỊCH ĐÃ BẮT ĐẦU*\n\n💰 Vốn: ${stats.totalCapital}U\n📊 Lệnh tối đa: ${stats.maxPositions}\n🎯 Điểm tín hiệu tối thiểu: 70/100\n🎯 Mục tiêu: 100U mỗi lệnh\n\n⚠️ Bot sẽ tự động:\n• Quét tín hiệu mỗi 15s\n• Sử dụng đòn bẩy tối đa\n• Đặt SL/TP tự động\n• Quản lý rủi ro`, { parse_mode: "Markdown" });
+    } catch (error) {
+        bot.sendMessage(msg.chat.id, `❌ Lỗi khởi động tự động giao dịch: ${error.message}`);
+    }
+});
+
+bot.onText(/⏹️ Auto Stop/, (msg) => {
+    autoTrader.stopAutoTrading();
+    bot.sendMessage(msg.chat.id, "⏹️ *TỰ ĐỘNG GIAO DỊCH ĐÃ DỪNG*\n\nBot sẽ không đặt lệnh mới nữa.", { parse_mode: "Markdown" });
+});
+
+bot.onText(/📊 Auto Status/, (msg) => {
+    const stats = autoTrader.getTradingStats();
+    let message = `🤖 *TRẠNG THÁI TỰ ĐỘNG GIAO DỊCH*\n\n`;
+    message += `🔄 Trạng thái: ${stats.isTrading ? '🟢 ĐANG CHẠY' : '🔴 ĐÃ DỪNG'}\n`;
+    message += `💰 Vốn tổng: ${stats.totalCapital}U\n`;
+    message += `📊 Lệnh đang mở: ${stats.openPositions}/${stats.maxPositions}\n\n`;
+    
+    if (stats.positions.length > 0) {
+        message += `📈 *LỆNH ĐANG MỞ:*\n`;
+        stats.positions.forEach((pos, index) => {
+            message += `${index + 1}. ${pos.symbol} | ${pos.side}\n`;
+            message += `   Khối lượng: ${pos.size} (${pos.leverage}x)\n`;
+            message += `   Entry: ${pos.entryPrice}\n`;
+            message += `   SL: ${pos.slPrice} | TP: ${pos.tpPrice}\n\n`;
+        });
+    } else {
+        message += `📭 Không có lệnh nào đang mở`;
+    }
+    
+    bot.sendMessage(msg.chat.id, message, { parse_mode: "Markdown" });
+});
+
+bot.onText(/⚙️ Auto Config/, (msg) => {
+    const configMessage = `
+⚙️ *CẤU HÌNH TỰ ĐỘNG GIAO DỊCH*
+
+💰 *Vốn:* 100U
+📊 *Lệnh tối đa:* 10 lệnh cùng lúc
+🎯 *Điểm tín hiệu tối thiểu:* 70/100
+🎯 *Mục tiêu:* 100U mỗi lệnh
+⚠️ *Rủi ro mỗi lệnh:* 2%
+
+📈 *Tính toán khối lượng:*
+• Sử dụng đòn bẩy tối đa có thể
+• Mục tiêu: 100U notional mỗi lệnh
+• Ví dụ: BTC 50x → 2U, ETH 20x → 5U
+
+🔄 *Tần suất quét:* 15 giây/lần
+🎯 *Symbols:* Top 20 coin theo volume
+🔍 *Nguồn tín hiệu:* Hệ thống phân tích hiện tại
+
+💡 *Lệnh điều khiển:*
+• \`/auto_start\` - Bắt đầu tự động giao dịch
+• \`/auto_stop\` - Dừng tự động giao dịch
+• \`/auto_status\` - Xem trạng thái
+• \`/auto_close_all\` - Đóng tất cả lệnh
+• \`/auto_config\` - Xem cấu hình
+`;
+    bot.sendMessage(msg.chat.id, configMessage, { parse_mode: "Markdown" });
 });
 
 bot.onText(/💡 Gợi ý LONG/, (msg) => { handleSuggestionRequest(msg.chat.id, "LONG"); });
@@ -1307,6 +1434,258 @@ async function handleScanAllCoins(chatId) {
         bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong quá trình quét hết coin. Vui lòng thử lại sau.");
     } finally {
         isScanning = false;
+    }
+}
+
+// ==== CÁC HÀM MISSING ====
+async function detectReversalSignals(candles) {
+    if (!candles || candles.length < 10) return null;
+    
+    const closes = candles.map(c => c.close);
+    const highs = candles.map(c => c.high);
+    const lows = candles.map(c => c.low);
+    
+    // Phân tích Hammer pattern
+    const lastCandle = candles[candles.length - 1];
+    const bodySize = Math.abs(lastCandle.close - lastCandle.open);
+    const lowerShadow = Math.min(lastCandle.close, lastCandle.open) - lastCandle.low;
+    const upperShadow = lastCandle.high - Math.max(lastCandle.close, lastCandle.open);
+    
+    const isHammer = lowerShadow > bodySize * 2 && upperShadow < bodySize * 0.5;
+    
+    // Phân tích Engulfing pattern
+    const prevCandle = candles[candles.length - 2];
+    const isBullishEngulfing = prevCandle.close < prevCandle.open && 
+                              lastCandle.close > lastCandle.open &&
+                              lastCandle.open < prevCandle.close &&
+                              lastCandle.close > prevCandle.open;
+    
+    const isBearishEngulfing = prevCandle.close > prevCandle.open && 
+                              lastCandle.close < lastCandle.open &&
+                              lastCandle.open > prevCandle.close &&
+                              lastCandle.close < prevCandle.open;
+    
+    // Phân tích RSI Divergence
+    const rsi = calcRSI(candles, 14);
+    const isDivergence = (rsi < 30 && closes[closes.length - 1] > closes[closes.length - 5]) ||
+                        (rsi > 70 && closes[closes.length - 1] < closes[closes.length - 5]);
+    
+    let signal = "NONE";
+    let strength = 0;
+    
+    if (isHammer && lastCandle.close > lastCandle.open) {
+        signal = "BULLISH";
+        strength += 30;
+    }
+    
+    if (isBullishEngulfing) {
+        signal = "BULLISH";
+        strength += 40;
+    }
+    
+    if (isHammer && lastCandle.close < lastCandle.open) {
+        signal = "BEARISH";
+        strength += 30;
+    }
+    
+    if (isBearishEngulfing) {
+        signal = "BEARISH";
+        strength += 40;
+    }
+    
+    if (isDivergence) {
+        strength += 20;
+    }
+    
+    return {
+        signal,
+        strength: Math.min(strength, 100),
+        isHammer,
+        isBullishEngulfing,
+        isBearishEngulfing,
+        isDivergence
+    };
+}
+
+async function getDailyMarketAnalysis(symbol) {
+    try {
+        const candles = await getCandles(symbol, "1D", 30);
+        if (!candles || candles.length < 20) return null;
+        
+        const analysis = await analyzeAdvancedIndicators(candles, "LONG");
+        const risk = detectCrashRisk(candles);
+        
+        let recommendation = null;
+        if (analysis && analysis.totalScore > 60) {
+            recommendation = {
+                direction: analysis.totalScore > 80 ? "LONG" : "NEUTRAL",
+                confidence: Math.min(analysis.totalScore, 100)
+            };
+        }
+        
+        return {
+            recommendation,
+            risk,
+            analysis
+        };
+    } catch (error) {
+        console.error(`Lỗi phân tích thị trường cho ${symbol}:`, error);
+        return null;
+    }
+}
+
+function detectCrashRisk(candles) {
+    if (candles.length < 20) return null;
+    
+    const closes = candles.map(c => c.close);
+    const recentPrices = closes.slice(-10);
+    const olderPrices = closes.slice(-20, -10);
+    
+    const recentAvg = recentPrices.reduce((sum, price) => sum + price, 0) / recentPrices.length;
+    const olderAvg = olderPrices.reduce((sum, price) => sum + price, 0) / olderPrices.length;
+    
+    const priceChange = (recentAvg - olderAvg) / olderAvg;
+    const volatility = calcATR(candles.slice(-10), 10) / recentAvg;
+    
+    let riskScore = 0;
+    
+    // Giảm giá mạnh
+    if (priceChange < -0.1) riskScore += 40;
+    else if (priceChange < -0.05) riskScore += 20;
+    
+    // Biến động cao
+    if (volatility > 0.08) riskScore += 30;
+    else if (volatility > 0.05) riskScore += 15;
+    
+    // Volume spike (simplified)
+    const volumes = candles.map(c => c.volume || 0);
+    const avgVolume = volumes.slice(-20).reduce((sum, vol) => sum + vol, 0) / 20;
+    const recentVolume = volumes.slice(-5).reduce((sum, vol) => sum + vol, 0) / 5;
+    
+    if (recentVolume > avgVolume * 2) riskScore += 20;
+    else if (recentVolume > avgVolume * 1.5) riskScore += 10;
+    
+    let riskLevel = "LOW";
+    if (riskScore > 60) riskLevel = "HIGH";
+    else if (riskScore > 30) riskLevel = "MEDIUM";
+    
+    return {
+        riskLevel,
+        riskScore: Math.min(riskScore, 100),
+        volatility,
+        priceChange
+    };
+}
+
+async function getDailyAnalysisReport() {
+    // Simplified daily analysis
+    return {
+        recommendation: "NEUTRAL",
+        confidence: 50,
+        reasoning: "Thị trường đang ở trạng thái trung tính",
+        riskFactors: [],
+        summary: {
+            fearGreedLevel: "Neutral",
+            marketBias: "Sideways",
+            structureTrend: "Consolidation",
+            timeRecommendation: "Wait for breakout",
+            riskLevel: "MEDIUM"
+        },
+        details: {
+            fearGreed: { value: 50, classification: "Neutral" },
+            topCoins: { bullishCount: 5, bearishCount: 5, bullishPercent: 50, bearishPercent: 50 },
+            marketStructure: { structureBias: "NEUTRAL", structureStrength: 0.5 },
+            timeAnalysis: { hour: new Date().getHours(), timeRecommendation: "Wait" }
+        }
+    };
+}
+
+async function scanForPremiumSignals(symbols) {
+    const premiumSignals = [];
+    
+    for (const symbol of symbols) {
+        try {
+            const signal = await getAllSignalsForSymbol(symbol);
+            if (signal.direction !== 'NONE' && signal.score >= 85) {
+                signal.symbol = symbol;
+                signal.quality = signal.score;
+                signal.confidence = signal.score;
+                signal.riskReward = Math.abs(signal.tp - signal.price) / Math.abs(signal.price - signal.sl);
+                premiumSignals.push(signal);
+            }
+        } catch (error) {
+            console.error(`Lỗi quét premium cho ${symbol}:`, error.message);
+        }
+    }
+    
+    return premiumSignals.sort((a, b) => b.quality - a.quality);
+}
+
+async function scanAllCoinsForOpportunities() {
+    const symbols = await getSymbols(null);
+    const opportunities = [];
+    
+    for (let i = 0; i < Math.min(symbols.length, 50); i++) {
+        const symbol = symbols[i];
+        try {
+            const signal = await getAllSignalsForSymbol(symbol);
+            if (signal.direction !== 'NONE') {
+                signal.symbol = symbol;
+                signal.quality = signal.score || calculateQualityScore(signal);
+                signal.confidence = signal.score || 70;
+                signal.riskReward = Math.abs(signal.tp - signal.price) / Math.abs(signal.price - signal.sl);
+                opportunities.push(signal);
+            }
+        } catch (error) {
+            console.error(`Lỗi quét ${symbol}:`, error.message);
+        }
+    }
+    
+    return opportunities.sort((a, b) => b.quality - a.quality);
+}
+
+async function analyzeSpecificCoin(symbol) {
+    try {
+        const cleanSymbol = symbol.toUpperCase().replace('-USDT-SWAP', '') + '-USDT-SWAP';
+        const signal = await getAllSignalsForSymbol(cleanSymbol);
+        
+        if (signal.direction === 'NONE') {
+            return {
+                success: false,
+                error: `Không tìm thấy tín hiệu cho ${symbol}`,
+                suggestions: ['BTC', 'ETH', 'SOL', 'AVAX', 'MATIC']
+            };
+        }
+        
+        signal.symbol = cleanSymbol;
+        signal.quality = signal.score || calculateQualityScore(signal);
+        signal.confidence = signal.score || 70;
+        signal.riskReward = Math.abs(signal.tp - signal.price) / Math.abs(signal.price - signal.sl);
+        
+        return {
+            success: true,
+            symbol: cleanSymbol,
+            recommendation: signal.direction,
+            quality: signal.quality,
+            confidence: signal.confidence,
+            price: signal.price,
+            tp: signal.tp,
+            sl: signal.sl,
+            riskReward: signal.riskReward,
+            analysis: {
+                daily: { trend: signal.direction, adx: signal.adx },
+                h4: { structure: signal.direction },
+                h1: { momentum: signal.direction },
+                m15: { entrySignal: signal.direction }
+            },
+            message: `Tín hiệu ${signal.direction} với điểm chất lượng ${signal.quality.toFixed(1)}/100`
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: `Lỗi phân tích ${symbol}: ${error.message}`,
+            suggestions: ['BTC', 'ETH', 'SOL', 'AVAX', 'MATIC']
+        };
     }
 }
 

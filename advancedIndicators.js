@@ -1234,3 +1234,75 @@ export function calcTSI(candles, longPeriod = 25, shortPeriod = 13) {
         strength: Math.abs(tsi) / 50
     };
 }
+
+/**
+ * Phát hiện tín hiệu đảo chiều
+ */
+export function detectReversalSignals(candles) {
+    if (!candles || candles.length < 10) return null;
+    
+    const closes = candles.map(c => c.close);
+    const highs = candles.map(c => c.high);
+    const lows = candles.map(c => c.low);
+    
+    // Phân tích Hammer pattern
+    const lastCandle = candles[candles.length - 1];
+    const bodySize = Math.abs(lastCandle.close - lastCandle.open);
+    const lowerShadow = Math.min(lastCandle.close, lastCandle.open) - lastCandle.low;
+    const upperShadow = lastCandle.high - Math.max(lastCandle.close, lastCandle.open);
+    
+    const isHammer = lowerShadow > bodySize * 2 && upperShadow < bodySize * 0.5;
+    
+    // Phân tích Engulfing pattern
+    const prevCandle = candles[candles.length - 2];
+    const isBullishEngulfing = prevCandle.close < prevCandle.open && 
+                              lastCandle.close > lastCandle.open &&
+                              lastCandle.open < prevCandle.close &&
+                              lastCandle.close > prevCandle.open;
+    
+    const isBearishEngulfing = prevCandle.close > prevCandle.open && 
+                              lastCandle.close < lastCandle.open &&
+                              lastCandle.open > prevCandle.close &&
+                              lastCandle.close < prevCandle.open;
+    
+    // Phân tích RSI Divergence
+    const rsi = calcRSI(candles, 14);
+    const isDivergence = (rsi < 30 && closes[closes.length - 1] > closes[closes.length - 5]) ||
+                        (rsi > 70 && closes[closes.length - 1] < closes[closes.length - 5]);
+    
+    let signal = "NONE";
+    let strength = 0;
+    
+    if (isHammer && lastCandle.close > lastCandle.open) {
+        signal = "BULLISH";
+        strength += 30;
+    }
+    
+    if (isBullishEngulfing) {
+        signal = "BULLISH";
+        strength += 40;
+    }
+    
+    if (isHammer && lastCandle.close < lastCandle.open) {
+        signal = "BEARISH";
+        strength += 30;
+    }
+    
+    if (isBearishEngulfing) {
+        signal = "BEARISH";
+        strength += 40;
+    }
+    
+    if (isDivergence) {
+        strength += 20;
+    }
+    
+    return {
+        signal,
+        strength: Math.min(strength, 100),
+        isHammer,
+        isBullishEngulfing,
+        isBearishEngulfing,
+        isDivergence
+    };
+}
