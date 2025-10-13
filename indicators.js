@@ -353,7 +353,7 @@ export async function getAllSignalsForSymbol(symbol) {
     }
     
     // Lọc và chấm điểm tín hiệu chất lượng cao
-    const autoThreshold = parseInt(process.env.QUALITY_THRESHOLD_AUTO) || 70;
+    const autoThreshold = parseInt(process.env.QUALITY_THRESHOLD_AUTO) || 60;
     const filteredSignals = await filterHighQualitySignals(allSignals, autoThreshold);
     
     // Trả về tín hiệu tốt nhất (điểm cao nhất)

@@ -45,9 +45,7 @@ const menuOptions = {
       ["/status", "/positions", "/stats"],
       ["/scan_top_100", "/scan_all_coins"],
       ["💡 Gợi ý LONG", "💡 Gợi ý SHORT"],
-      ["/theodoi", "/quality", "/risk_check"],
-      ["🤖 Auto Start", "⏹️ Auto Stop", "📊 Auto Status"],
-      ["⚙️ Auto Config", "/auto_close_all"]
+      ["/theodoi", "/quality", "/risk_check"]
     ],
     resize_keyboard: true,
   },
@@ -80,8 +78,8 @@ bot.onText(/\/quality/, (msg) => {
 🎯 *THIẾT LẬP CHẤT LƯỢNG TÍN HIỆU*
 
 📊 *Ngưỡng điểm số hiện tại:*
-• Tín hiệu tự động: ≥70 điểm
-• Gợi ý LONG/SHORT: ≥75 điểm
+• Tín hiệu tự động: ≥60 điểm
+• Gợi ý LONG/SHORT: ≥65 điểm
 
 🔧 *Các lệnh điều chỉnh:*
 • \`/set_quality_auto [điểm]\` - Đặt ngưỡng tín hiệu tự động
@@ -89,10 +87,10 @@ bot.onText(/\/quality/, (msg) => {
 • \`/quality_info\` - Xem thông tin chi tiết về hệ thống chấm điểm
 
 💡 *Gợi ý:*
-• 60-70: Chất lượng trung bình
-• 70-80: Chất lượng tốt  
-• 80-90: Chất lượng cao
-• 90+: Chất lượng xuất sắc
+• 50-60: Chất lượng trung bình
+• 60-70: Chất lượng tốt  
+• 70-80: Chất lượng cao
+• 80+: Chất lượng xuất sắc
 `;
     bot.sendMessage(msg.chat.id, qualityMessage, { parse_mode: "Markdown" });
 });
@@ -421,12 +419,12 @@ async function handleSuggestionRequest(chatId, direction) {
         }
         
         if (suggestions.length === 0) { 
-            bot.sendMessage(chatId, `✅ Đã quét xong. Không tìm thấy gợi ý ${direction} nào đạt tiêu chuẩn chất lượng cao (≥70 điểm).`); 
+            bot.sendMessage(chatId, `✅ Đã quét xong. Không tìm thấy gợi ý ${direction} nào đạt tiêu chuẩn chất lượng cao (≥65 điểm).`); 
             return; 
         }
         
         // Lọc và sắp xếp theo điểm số chất lượng
-        const suggestThreshold = parseInt(process.env.QUALITY_THRESHOLD_SUGGEST) || 75;
+        const suggestThreshold = parseInt(process.env.QUALITY_THRESHOLD_SUGGEST) || 65;
         const filteredSuggestions = await filterHighQualitySignals(suggestions, suggestThreshold);
         const topSuggestions = filteredSuggestions.slice(0, 5);
         
