@@ -44,7 +44,7 @@ const menuOptions = {
   reply_markup: {
     keyboard: [
       ["/status", "/positions", "/stats"],
-      ["/wyckoff_scan", "/scan_all_coins"],
+      ["/wyckoff_scan", "/quick_scan"],
       ["💡 Gợi ý LONG", "💡 Gợi ý SHORT"],
       ["/wyckoff BTC", "/volume_profile ETH", "/dual_rsi SOL"],
       ["/theodoi", "/quality", "/risk_check"],
@@ -87,6 +87,10 @@ bot.onText(/\/dual_rsi (.+)/, async (msg, match) => {
 
 bot.onText(/\/wyckoff_scan/, async (msg) => {
     await handleWyckoffScanAll(msg.chat.id);
+});
+
+bot.onText(/\/quick_scan/, async (msg) => {
+    await handleQuickVolumeScan(msg.chat.id);
 });
 bot.onText(/\/stats/, (msg) => { const statsMessage = getTradeStats(); bot.sendMessage(msg.chat.id, statsMessage, { parse_mode: "Markdown" }); });
 bot.onText(/\/theodoi/, async (msg) => { const trades = getOpenTrades(); if (trades.length === 0) { return bot.sendMessage(msg.chat.id, "📭 Bạn không có lệnh nào đang được theo dõi."); } bot.sendMessage(msg.chat.id, "🔍 Đang kiểm tra trạng thái các lệnh..."); let reportMessage = "📊 *BÁO CÁO TRẠNG THÁI LỆNH* 📊\n\n"; const pricePromises = trades.map(trade => getCurrentPrice(trade.symbol)); const currentPrices = await Promise.all(pricePromises); trades.forEach((trade, index) => { const currentPrice = currentPrices[index]; if (currentPrice === null) { reportMessage += `*${trade.symbol}* | ${trade.direction}\n- Không thể lấy giá hiện tại.\n\n`; return; } let pnlPercent = 0; if (trade.direction === 'LONG') { pnlPercent = ((currentPrice - trade.entry) / trade.entry) * 100; } else { pnlPercent = ((trade.entry - currentPrice) / trade.entry) * 100; } const statusIcon = pnlPercent >= 0 ? '🟢' : '🔴'; const formattedPnl = pnlPercent.toFixed(2); reportMessage += `${statusIcon} *${trade.symbol}* | ${trade.direction}\n`; reportMessage += `- Entry: \`${trade.entry}\`\n`; reportMessage += `- Giá hiện tại: \`${currentPrice}\`\n`; reportMessage += `- Lãi/Lỗ: *${formattedPnl}%*\n\n`; }); bot.sendMessage(msg.chat.id, reportMessage, { parse_mode: "Markdown" }); });
@@ -723,6 +727,12 @@ async function initialize() {
   cron.schedule("*/3 * * * *", async () => {
     if (isScanning || !symbols || !symbols.length) { console.log("⚠️ [BOT] Bỏ qua quét định kỳ."); return; }
     await scanAll(symbols, "cron");
+  });
+  
+  // Phân tích Wyckoff hàng ngày lúc 8:00 sáng cho các coin chính
+  cron.schedule("0 8 * * *", async () => {
+    console.log("🎯 [WYCKOFF DAILY] Bắt đầu phân tích Wyckoff hàng ngày...");
+    await handleWyckoffDailyAnalysis(process.env.TELEGRAM_CHAT_ID);
   });
   
   // Phân tích hàng ngày lúc 8:00 sáng
@@ -2354,6 +2364,428 @@ function calculateWyckoffScore(signal) {
             score += 5; // Bonus cơ bản
         }
     }
+    
+    return Math.min(score, 100);
+}
+
+// ==== PHÂN TÍCH WYCKOFF HÀNG NGÀY ====
+async function handleWyckoffDailyAnalysis(chatId) {
+    try {
+        const majorCoins = ['BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'SOL-USDT-SWAP', 'AVAX-USDT-SWAP', 'MATIC-USDT-SWAP'];
+        
+        bot.sendMessage(chatId, "🎯 *PHÂN TÍCH WYCKOFF HÀNG NGÀY*\n\nĐang phân tích các coin chính với hệ thống Wyckoff Volume Profile + Dual RSI...");
+        
+        let dailyAnalysis = {
+            bullishCoins: [],
+            bearishCoins: [],
+            neutralCoins: [],
+            recommendations: []
+        };
+        
+        for (const symbol of majorCoins) {
+            try {
+                console.log(`[WYCKOFF DAILY] Phân tích ${symbol}...`);
+                
+                const wyckoffAnalyzer = new WyckoffVolumeAnalysis(symbol, '1H', 100);
+                const analysisResult = await wyckoffAnalyzer.performAnalysis();
+                
+                if (!analysisResult.success) continue;
+                
+                const analysis = analysisResult.analysis;
+                const signalResult = await wyckoffAnalyzer.generateTradingSignal();
+                
+                if (signalResult.direction !== 'NONE') {
+                    const coinData = {
+                        symbol: symbol.replace('-USDT-SWAP', ''),
+                        direction: signalResult.direction,
+                        confidence: signalResult.confidence,
+                        price: analysis.currentPrice,
+                        analysis: analysis,
+                        wyckoffScore: calculateWyckoffScore({
+                            direction: signalResult.direction,
+                            confidence: signalResult.confidence,
+                            wyckoffAnalysis: analysis
+                        })
+                    };
+                    
+                    if (signalResult.direction === 'LONG') {
+                        dailyAnalysis.bullishCoins.push(coinData);
+                    } else {
+                        dailyAnalysis.bearishCoins.push(coinData);
+                    }
+                } else {
+                    dailyAnalysis.neutralCoins.push({
+                        symbol: symbol.replace('-USDT-SWAP', ''),
+                        price: analysis.currentPrice,
+                        analysis: analysis
+                    });
+                }
+                
+                await sleep(200); // Tránh rate limit
+                
+            } catch (error) {
+                console.error(`Lỗi phân tích Wyckoff hàng ngày cho ${symbol}:`, error);
+            }
+        }
+        
+        // Tạo báo cáo hàng ngày
+        const today = new Date().toLocaleDateString('vi-VN');
+        let reportMessage = `🎯 *BÁO CÁO WYCKOFF HÀNG NGÀY*\n`;
+        reportMessage += `📅 Ngày: ${today}\n\n`;
+        
+        // Phân tích xu hướng tổng thể
+        const totalAnalyzed = dailyAnalysis.bullishCoins.length + dailyAnalysis.bearishCoins.length + dailyAnalysis.neutralCoins.length;
+        const bullishPercent = totalAnalyzed > 0 ? (dailyAnalysis.bullishCoins.length / totalAnalyzed * 100).toFixed(1) : 0;
+        const bearishPercent = totalAnalyzed > 0 ? (dailyAnalysis.bearishCoins.length / totalAnalyzed * 100).toFixed(1) : 0;
+        
+        reportMessage += "📊 *XU HƯỚNG THỊ TRƯỜNG:*\n";
+        if (bullishPercent > 60) {
+            reportMessage += `📈 Xu hướng tích cực mạnh (${bullishPercent}% coin tăng)\n`;
+            dailyAnalysis.recommendations.push("Ưu tiên các lệnh LONG");
+        } else if (bearishPercent > 60) {
+            reportMessage += `📉 Xu hướng tiêu cực mạnh (${bearishPercent}% coin giảm)\n`;
+            dailyAnalysis.recommendations.push("Ưu tiên các lệnh SHORT");
+        } else {
+            reportMessage += `⚖️ Thị trường cân bằng (${bullishPercent}% tăng, ${bearishPercent}% giảm)\n`;
+            dailyAnalysis.recommendations.push("Giao dịch thận trọng, chọn coin có điểm cao nhất");
+        }
+        reportMessage += `\n`;
+        
+        // Coin tích cực
+        if (dailyAnalysis.bullishCoins.length > 0) {
+            reportMessage += "📈 *COIN XU HƯỚNG TÍCH CỰC:*\n";
+            dailyAnalysis.bullishCoins
+                .sort((a, b) => b.wyckoffScore - a.wyckoffScore)
+                .forEach((coin, index) => {
+                    const qualityIcon = coin.wyckoffScore > 80 ? '🔥' : coin.wyckoffScore > 60 ? '⭐' : '✅';
+                    reportMessage += `${index + 1}. ${qualityIcon} *${coin.symbol}*\n`;
+                    reportMessage += `   📊 Wyckoff Score: ${coin.wyckoffScore.toFixed(1)}/100\n`;
+                    reportMessage += `   📈 Confidence: ${coin.confidence}%\n`;
+                    reportMessage += `   💰 Giá: ${coin.price.toFixed(5)}\n`;
+                    
+                    // Thông tin Volume Profile
+                    if (coin.analysis.volumeProfile.poc) {
+                        reportMessage += `   🎯 POC: ${coin.analysis.volumeProfile.poc.price.toFixed(5)}\n`;
+                    }
+                    if (coin.analysis.keyVolume.isKeyVolume) {
+                        reportMessage += `   🔊 Key Volume: ${coin.analysis.keyVolume.strength}\n`;
+                    }
+                    reportMessage += `\n`;
+                });
+        }
+        
+        // Coin tiêu cực
+        if (dailyAnalysis.bearishCoins.length > 0) {
+            reportMessage += "📉 *COIN XU HƯỚNG TIÊU CỰC:*\n";
+            dailyAnalysis.bearishCoins
+                .sort((a, b) => b.wyckoffScore - a.wyckoffScore)
+                .forEach((coin, index) => {
+                    const qualityIcon = coin.wyckoffScore > 80 ? '🔥' : coin.wyckoffScore > 60 ? '⭐' : '✅';
+                    reportMessage += `${index + 1}. ${qualityIcon} *${coin.symbol}*\n`;
+                    reportMessage += `   📊 Wyckoff Score: ${coin.wyckoffScore.toFixed(1)}/100\n`;
+                    reportMessage += `   📉 Confidence: ${coin.confidence}%\n`;
+                    reportMessage += `   💰 Giá: ${coin.price.toFixed(5)}\n`;
+                    
+                    // Thông tin Volume Profile
+                    if (coin.analysis.volumeProfile.poc) {
+                        reportMessage += `   🎯 POC: ${coin.analysis.volumeProfile.poc.price.toFixed(5)}\n`;
+                    }
+                    if (coin.analysis.keyVolume.isKeyVolume) {
+                        reportMessage += `   🔊 Key Volume: ${coin.analysis.keyVolume.strength}\n`;
+                    }
+                    reportMessage += `\n`;
+                });
+        }
+        
+        // Coin trung tính
+        if (dailyAnalysis.neutralCoins.length > 0) {
+            reportMessage += "⚖️ *COIN TRUNG TÍNH:*\n";
+            dailyAnalysis.neutralCoins.forEach((coin, index) => {
+                reportMessage += `${index + 1}. *${coin.symbol}* - Giá: ${coin.price.toFixed(5)}\n`;
+            });
+            reportMessage += `\n`;
+        }
+        
+        // Khuyến nghị giao dịch
+        reportMessage += "💡 *KHUYẾN NGHỊ GIAO DỊCH HÔM NAY:*\n";
+        dailyAnalysis.recommendations.forEach((rec, index) => {
+            reportMessage += `${index + 1}. ${rec}\n`;
+        });
+        
+        // Khuyến nghị cụ thể
+        if (dailyAnalysis.bullishCoins.length > 0) {
+            const topBullish = dailyAnalysis.bullishCoins.sort((a, b) => b.wyckoffScore - a.wyckoffScore)[0];
+            reportMessage += `\n🎯 *COIN ƯU TIÊN LONG:* ${topBullish.symbol} (Score: ${topBullish.wyckoffScore.toFixed(1)})\n`;
+        }
+        
+        if (dailyAnalysis.bearishCoins.length > 0) {
+            const topBearish = dailyAnalysis.bearishCoins.sort((a, b) => b.wyckoffScore - a.wyckoffScore)[0];
+            reportMessage += `🎯 *COIN ƯU TIÊN SHORT:* ${topBearish.symbol} (Score: ${topBearish.wyckoffScore.toFixed(1)})\n`;
+        }
+        
+        reportMessage += `\n🛡️ *LƯU Ý QUAN TRỌNG:*\n`;
+        reportMessage += `• Sử dụng Volume Profile để xác định entry/exit\n`;
+        reportMessage += `• Key Volume xác nhận động lực\n`;
+        reportMessage += `• Dual RSI cho tín hiệu timing\n`;
+        reportMessage += `• Luôn đặt Stop Loss\n`;
+        
+        reportMessage += `\n📊 *ĐỂ PHÂN TÍCH CHI TIẾT:*\n`;
+        reportMessage += `• \`/wyckoff BTC\` - Phân tích Wyckoff chi tiết\n`;
+        reportMessage += `• \`/volume_profile ETH\` - Phân tích Volume Profile\n`;
+        reportMessage += `• \`/dual_rsi SOL\` - Phân tích Dual RSI\n`;
+        reportMessage += `• \`/wyckoff_scan\` - Quét tất cả coin\n`;
+        
+        bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
+        
+    } catch (error) {
+        console.error("Lỗi phân tích Wyckoff hàng ngày:", error);
+        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong phân tích Wyckoff hàng ngày.");
+    }
+}
+
+// ==== QUÉT NHANH VOLUME PROFILE + KEY VOLUME + DUAL RSI ====
+async function handleQuickVolumeScan(chatId) {
+    if (isScanning) {
+        return bot.sendMessage(chatId, "⚠️ Bot đang bận, vui lòng thử lại sau.");
+    }
+    
+    bot.sendMessage(chatId, "⚡ Đang quét nhanh với Volume Profile + Key Volume + Dual RSI...\n\n🎯 Tìm kiếm cơ hội giao dịch dựa trên phân tích volume và momentum.");
+    isScanning = true;
+    
+    try {
+        const allSymbols = await getAllSymbols();
+        if (!allSymbols || allSymbols.length === 0) {
+            bot.sendMessage(chatId, "❌ Không thể lấy danh sách coin.");
+            return;
+        }
+        
+        let volumeSignals = [];
+        const totalSymbols = allSymbols.length;
+        let processedCount = 0;
+        
+        bot.sendMessage(chatId, `🔍 Bắt đầu quét nhanh ${totalSymbols} coin...`);
+        
+        for (let i = 0; i < totalSymbols; i++) {
+            const symbol = allSymbols[i];
+            
+            try {
+                console.log(`[QUICK SCAN] Đang phân tích (${i+1}/${totalSymbols}): ${symbol}`);
+                
+                // Phân tích nhanh với Volume Profile + Key Volume + Dual RSI
+                const quickAnalysis = await performQuickVolumeAnalysis(symbol);
+                
+                if (quickAnalysis && quickAnalysis.direction !== 'NONE') {
+                    quickAnalysis.symbol = symbol;
+                    quickAnalysis.volumeScore = calculateVolumeScore(quickAnalysis);
+                    
+                    volumeSignals.push(quickAnalysis);
+                    
+                    // Gửi tín hiệu ngay khi tìm thấy (ngưỡng thấp hơn)
+                    if (quickAnalysis.volumeScore >= 40) {
+                        const quickMessage = `⚡ *VOLUME SIGNAL FOUND*\n\n${quickAnalysis.direction} ${symbol}\n📊 Volume Score: ${quickAnalysis.volumeScore}/100\n💰 Entry: ${quickAnalysis.price.toFixed(5)}\n🎯 TP: ${quickAnalysis.tp.toFixed(5)}\n🛑 SL: ${quickAnalysis.sl.toFixed(5)}`;
+                        bot.sendMessage(chatId, quickMessage, { parse_mode: "Markdown" });
+                    }
+                }
+                
+                processedCount++;
+                
+                // Cập nhật tiến trình mỗi 100 coin
+                if (processedCount % 100 === 0) {
+                    bot.sendMessage(chatId, `⏳ Đã quét ${processedCount}/${totalSymbols} coin. Tìm thấy ${volumeSignals.length} tín hiệu volume.`);
+                }
+                
+                await sleep(50); // Quét nhanh hơn
+                
+            } catch (error) {
+                console.error(`Lỗi quét nhanh cho ${symbol}:`, error.message);
+            }
+        }
+        
+        // Tạo báo cáo tổng hợp
+        if (volumeSignals.length === 0) {
+            bot.sendMessage(chatId, "✅ Đã quét xong. Không tìm thấy tín hiệu volume nào phù hợp.\n\n💡 Thị trường có thể đang ở trạng thái không có động lực volume rõ ràng.");
+            return;
+        }
+        
+        // Sắp xếp theo điểm Volume
+        volumeSignals.sort((a, b) => b.volumeScore - a.volumeScore);
+        
+        // Phân loại theo chất lượng Volume
+        const strongVolumeSignals = volumeSignals.filter(s => s.volumeScore >= 60);
+        const mediumVolumeSignals = volumeSignals.filter(s => s.volumeScore >= 40 && s.volumeScore < 60);
+        const weakVolumeSignals = volumeSignals.filter(s => s.volumeScore >= 20 && s.volumeScore < 40);
+        
+        let reportMessage = "⚡ *QUICK VOLUME SCAN - BÁO CÁO TỔNG HỢP*\n\n";
+        reportMessage += `📊 Đã quét: ${totalSymbols} coin\n`;
+        reportMessage += `⚡ Tìm thấy: ${volumeSignals.length} tín hiệu volume\n\n`;
+        
+        reportMessage += "📈 *PHÂN LOẠI THEO VOLUME:*\n";
+        reportMessage += `🔥 Volume mạnh (≥60 điểm): ${strongVolumeSignals.length} tín hiệu\n`;
+        reportMessage += `⚡ Volume trung bình (40-59 điểm): ${mediumVolumeSignals.length} tín hiệu\n`;
+        reportMessage += `💡 Volume yếu (20-39 điểm): ${weakVolumeSignals.length} tín hiệu\n\n`;
+        
+        // Top 15 tín hiệu tốt nhất
+        const topSignals = volumeSignals.slice(0, 15);
+        reportMessage += "🏆 *TOP 15 TÍN HIỆU VOLUME TỐT NHẤT:*\n\n";
+        
+        topSignals.forEach((signal, index) => {
+            const volumeIcon = signal.volumeScore > 80 ? '🔥' : 
+                             signal.volumeScore > 60 ? '⚡' : 
+                             signal.volumeScore > 40 ? '💡' : '📊';
+            const directionIcon = signal.direction === 'LONG' ? '📈' : '📉';
+            
+            reportMessage += `${index + 1}. ${volumeIcon} *${signal.symbol}* | ${directionIcon} ${signal.direction}\n`;
+            reportMessage += `   📊 Volume Score: ${signal.volumeScore.toFixed(1)}/100\n`;
+            reportMessage += `   🔊 Key Volume: ${signal.keyVolumeStrength}\n`;
+            reportMessage += `   📈 RSI Trend: ${signal.rsiTrend}\n`;
+            reportMessage += `   💰 Entry: ${signal.price.toFixed(5)}\n`;
+            reportMessage += `   🎯 TP: ${signal.tp.toFixed(5)} | 🛑 SL: ${signal.sl.toFixed(5)}\n\n`;
+        });
+        
+        // Thống kê theo hướng
+        const longSignals = volumeSignals.filter(s => s.direction === 'LONG');
+        const shortSignals = volumeSignals.filter(s => s.direction === 'SHORT');
+        
+        reportMessage += "📊 *THỐNG KÊ THEO HƯỚNG:*\n";
+        reportMessage += `📈 LONG: ${longSignals.length} tín hiệu (${((longSignals.length / volumeSignals.length) * 100).toFixed(1)}%)\n`;
+        reportMessage += `📉 SHORT: ${shortSignals.length} tín hiệu (${((shortSignals.length / volumeSignals.length) * 100).toFixed(1)}%)\n\n`;
+        
+        // Khuyến nghị
+        reportMessage += "💡 *KHUYẾN NGHỊ VOLUME:*\n";
+        if (strongVolumeSignals.length > 0) {
+            reportMessage += "✅ Ưu tiên các tín hiệu Volume mạnh (≥60 điểm)\n";
+        }
+        if (mediumVolumeSignals.length > 0) {
+            reportMessage += "⚡ Cân nhắc các tín hiệu Volume trung bình (40-59 điểm)\n";
+        }
+        if (longSignals.length > shortSignals.length) {
+            reportMessage += "📈 Thị trường có động lực tích cực - Ưu tiên LONG\n";
+        } else if (shortSignals.length > longSignals.length) {
+            reportMessage += "📉 Thị trường có động lực tiêu cực - Ưu tiên SHORT\n";
+        } else {
+            reportMessage += "⚖️ Thị trường cân bằng - Chọn tín hiệu có Volume Score cao nhất\n";
+        }
+        
+        reportMessage += "\n🛡️ *LƯU Ý QUAN TRỌNG:*\n";
+        reportMessage += "• Ưu tiên vào lệnh với Volume Score ≥ 50\n";
+        reportMessage += "• Key Volume xác nhận động lực\n";
+        reportMessage += "• Dual RSI cho timing entry\n";
+        reportMessage += "• Luôn đặt Stop Loss\n";
+        
+        bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
+        
+    } catch (error) {
+        console.error("Lỗi khi quét nhanh volume:", error);
+        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong quá trình quét nhanh volume. Vui lòng thử lại sau.");
+    } finally {
+        isScanning = false;
+    }
+}
+
+/**
+ * Phân tích nhanh Volume Profile + Key Volume + Dual RSI
+ */
+async function performQuickVolumeAnalysis(symbol) {
+    try {
+        const wyckoffAnalyzer = new WyckoffVolumeAnalysis(symbol, '1H', 50); // Giảm lookback để nhanh hơn
+        const analysisResult = await wyckoffAnalyzer.performAnalysis();
+        
+        if (!analysisResult.success) return null;
+        
+        const analysis = analysisResult.analysis;
+        
+        // Kiểm tra điều kiện Volume Profile + Key Volume + Dual RSI
+        let direction = 'NONE';
+        let confidence = 0;
+        
+        // Điều kiện Key Volume
+        const hasKeyVolume = analysis.keyVolume && analysis.keyVolume.isKeyVolume;
+        const keyVolumeStrength = analysis.keyVolume ? analysis.keyVolume.strength : 'NONE';
+        
+        // Điều kiện Volume Profile
+        const hasPOC = analysis.volumeProfile && analysis.volumeProfile.poc;
+        const hasValueArea = analysis.volumeProfile && analysis.volumeProfile.valueArea;
+        const isInValueArea = analysis.isInValueArea;
+        
+        // Điều kiện Dual RSI
+        const rsiTrend = analysis.dualRSI ? analysis.dualRSI.trend : 'NEUTRAL';
+        const hasRSISignals = analysis.dualRSI && analysis.dualRSI.signals && analysis.dualRSI.signals.length > 0;
+        
+        // Logic tín hiệu đơn giản
+        if (hasKeyVolume && hasPOC && hasRSISignals) {
+            if (rsiTrend === 'BULLISH' && analysis.keyVolume.candle.close > analysis.keyVolume.candle.open) {
+                direction = 'LONG';
+                confidence = 60;
+            } else if (rsiTrend === 'BEARISH' && analysis.keyVolume.candle.close < analysis.keyVolume.candle.open) {
+                direction = 'SHORT';
+                confidence = 60;
+            }
+        }
+        
+        if (direction === 'NONE') return null;
+        
+        // Tính SL/TP đơn giản
+        const currentPrice = analysis.currentPrice;
+        const atr = analysis.keyVolume.candle.high - analysis.keyVolume.candle.low; // Simplified ATR
+        
+        let sl, tp;
+        if (direction === 'LONG') {
+            sl = currentPrice - atr * 1.5;
+            tp = currentPrice + atr * 2.5;
+        } else {
+            sl = currentPrice + atr * 1.5;
+            tp = currentPrice - atr * 2.5;
+        }
+        
+        return {
+            direction,
+            confidence,
+            price: currentPrice,
+            tp,
+            sl,
+            keyVolumeStrength,
+            rsiTrend,
+            hasPOC,
+            hasValueArea,
+            isInValueArea
+        };
+        
+    } catch (error) {
+        console.error(`Lỗi phân tích nhanh volume cho ${symbol}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Tính điểm Volume Score
+ */
+function calculateVolumeScore(signal) {
+    let score = 0;
+    
+    // Key Volume (40%)
+    const volumeMultipliers = {
+        'VERY_HIGH': 40,
+        'HIGH': 35,
+        'MEDIUM': 30,
+        'LOW': 25,
+        'VERY_LOW': 20,
+        'NONE': 0
+    };
+    score += volumeMultipliers[signal.keyVolumeStrength] || 0;
+    
+    // RSI Trend (30%)
+    if (signal.rsiTrend === signal.direction) {
+        score += 30;
+    } else if (signal.rsiTrend !== 'NEUTRAL') {
+        score += 15;
+    }
+    
+    // Volume Profile (20%)
+    if (signal.hasPOC) score += 10;
+    if (signal.hasValueArea) score += 10;
+    
+    // Confidence (10%)
+    score += signal.confidence * 0.1;
     
     return Math.min(score, 100);
 }

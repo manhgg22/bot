@@ -217,9 +217,11 @@ async function getLTFEntry(symbol, bias) {
 
 async function findSignalWithADX(symbol, strategyFn) {
     const signal = await strategyFn(symbol);
+    
     if (!signal) {
         return { direction: "NONE" };
     }
+    
     if (signal.direction !== "NONE") {
         const adxCandles = await getCandles(symbol, '1H', 50);
         if (adxCandles && adxCandles.length > 0) {
@@ -229,6 +231,7 @@ async function findSignalWithADX(symbol, strategyFn) {
             signal.adx = 0;
         }
     }
+    
     return signal;
 }
 

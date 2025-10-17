@@ -333,7 +333,9 @@ export class DualRSI {
      * Tính RSI
      */
     calculateRSI(period) {
-        if (!this.candles || this.candles.length < period + 1) return [];
+        if (!this.candles || this.candles.length < Math.min(period + 1, 10)) {
+            return [];
+        }
 
         const closes = this.candles.map(c => c.close);
         const gains = [];
@@ -346,16 +348,17 @@ export class DualRSI {
         }
 
         const rsiValues = [];
-        let avgGain = gains.slice(0, period).reduce((sum, gain) => sum + gain, 0) / period;
-        let avgLoss = losses.slice(0, period).reduce((sum, loss) => sum + loss, 0) / period;
+        const actualPeriod = Math.min(period, gains.length);
+        let avgGain = gains.slice(0, actualPeriod).reduce((sum, gain) => sum + gain, 0) / actualPeriod;
+        let avgLoss = losses.slice(0, actualPeriod).reduce((sum, loss) => sum + loss, 0) / actualPeriod;
 
-        for (let i = period; i < gains.length; i++) {
+        for (let i = actualPeriod; i < gains.length; i++) {
             const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
             const rsi = 100 - (100 / (1 + rs));
             rsiValues.push(rsi);
 
-            avgGain = ((avgGain * (period - 1)) + gains[i]) / period;
-            avgLoss = ((avgLoss * (period - 1)) + losses[i]) / period;
+            avgGain = ((avgGain * (actualPeriod - 1)) + gains[i]) / actualPeriod;
+            avgLoss = ((avgLoss * (actualPeriod - 1)) + losses[i]) / actualPeriod;
         }
 
         return rsiValues;
@@ -480,9 +483,12 @@ export class DualRSI {
      */
     getTrend() {
         const current = this.getCurrentRSI();
-        
-        if (current.slow > 50 && current.fast > 50) return 'BULLISH';
-        if (current.slow < 50 && current.fast < 50) return 'BEARISH';
+        if (current.slow > 50 && current.fast > 50) {
+            return 'BULLISH';
+        }
+        if (current.slow < 50 && current.fast < 50) {
+            return 'BEARISH';
+        }
         return 'NEUTRAL';
     }
 
@@ -512,8 +518,9 @@ export class WyckoffVolumeAnalysis {
         try {
             // Lấy dữ liệu nến
             const candles = await getCandles(this.symbol, this.timeframe, this.lookbackPeriod);
-            if (!candles || candles.length < 50) {
-                return { success: false, error: 'Không đủ dữ liệu' };
+            
+            if (!candles || candles.length < 20) {
+                return { success: false, error: `Không đủ dữ liệu (cần ít nhất 20 nến, chỉ có ${candles ? candles.length : 0})` };
             }
 
             // Khởi tạo các analyzer
@@ -574,22 +581,40 @@ export class WyckoffVolumeAnalysis {
         const analysis = analysisResult.analysis;
         const signals = [];
 
-        // Phân tích Key Volume
+        // Phân tích Key Volume - giảm ngưỡng để có nhiều tín hiệu hơn
         if (analysis.keyVolume.isKeyVolume) {
             const lastCandle = analysis.keyVolume.candle;
             const isBullishVolume = lastCandle.close > lastCandle.open;
             
-            if (isBullishVolume && analysis.keyVolume.strength !== 'VERY_LOW') {
+            if (isBullishVolume) {
                 signals.push({
                     type: 'KEY_VOLUME_BULLISH',
                     strength: analysis.keyVolume.strength,
                     score: this.calculateVolumeScore(analysis.keyVolume)
                 });
-            } else if (!isBullishVolume && analysis.keyVolume.strength !== 'VERY_LOW') {
+            } else {
                 signals.push({
                     type: 'KEY_VOLUME_BEARISH',
                     strength: analysis.keyVolume.strength,
                     score: this.calculateVolumeScore(analysis.keyVolume)
+                });
+            }
+        } else if (analysis.keyVolume && analysis.keyVolume.multiplier >= 1.2) {
+            // Tín hiệu volume cao hơn trung bình 20%
+            const lastCandle = analysis.keyVolume.candle;
+            const isBullishVolume = lastCandle.close > lastCandle.open;
+            
+            if (isBullishVolume) {
+                signals.push({
+                    type: 'VOLUME_BULLISH',
+                    strength: 'LOW',
+                    score: 15
+                });
+            } else {
+                signals.push({
+                    type: 'VOLUME_BEARISH',
+                    strength: 'LOW',
+                    score: 15
                 });
             }
         }
@@ -618,7 +643,7 @@ export class WyckoffVolumeAnalysis {
             }
         }
 
-        // Phân tích Dual RSI
+        // Phân tích Dual RSI - giảm ngưỡng để có nhiều tín hiệu hơn
         const rsiSignals = analysis.dualRSI.signals;
         rsiSignals.forEach(signal => {
             if (signal.type === 'BULLISH_CROSSOVER' || signal.type === 'OVERSOLD') {
@@ -635,6 +660,24 @@ export class WyckoffVolumeAnalysis {
                 });
             }
         });
+        
+        // Tín hiệu RSI đơn giản dựa trên giá trị hiện tại
+        const currentRSI = analysis.dualRSI.current;
+        if (currentRSI) {
+            if (currentRSI.fast > 60) {
+                signals.push({
+                    type: 'RSI_BULLISH',
+                    strength: 'MEDIUM',
+                    score: 20
+                });
+            } else if (currentRSI.fast < 40) {
+                signals.push({
+                    type: 'RSI_BEARISH',
+                    strength: 'MEDIUM',
+                    score: 20
+                });
+            }
+        }
 
         // Tổng hợp tín hiệu
         const bullishSignals = signals.filter(s => 
@@ -651,11 +694,11 @@ export class WyckoffVolumeAnalysis {
         let confidence = 0;
         let reason = '';
 
-        if (bullishScore > bearishScore && bullishScore > 30) {
+        if (bullishScore > bearishScore && bullishScore > 10) {
             direction = 'LONG';
             confidence = Math.min(bullishScore, 100);
             reason = `Tín hiệu tích cực (${bullishSignals.length} tín hiệu)`;
-        } else if (bearishScore > bullishScore && bearishScore > 30) {
+        } else if (bearishScore > bullishScore && bearishScore > 10) {
             direction = 'SHORT';
             confidence = Math.min(bearishScore, 100);
             reason = `Tín hiệu tiêu cực (${bearishSignals.length} tín hiệu)`;

@@ -14,12 +14,11 @@ export async function getCandles(symbol, bar = "1H", limit = 100) {
       params: { instId: symbol, bar, limit }
     });
 
-    // Dữ liệu OKX trả về có các cột theo thứ tự:
-    // [ts, open, high, low, close, vol, volCcy]
-    // - vol: Khối lượng giao dịch (tính bằng coin, ví dụ: BTC)
-    // - volCcy: Khối lượng giao dịch (tính bằng tiền tệ, ví dụ: USDT)
-    // Chúng ta sẽ dùng volCcy (ở vị trí thứ 6) để so sánh khối lượng giữa các coin cho nhất quán.
-    return res.data.data
+    if (res.data.code !== '0') {
+      return [];
+    }
+
+    const candles = res.data.data
       .map(c => ({
         ts: Number(c[0]),
         open: Number(c[1]),
@@ -29,9 +28,10 @@ export async function getCandles(symbol, bar = "1H", limit = 100) {
         volume: Number(c[6]) // Lấy volCcy
       }))
       .reverse(); // Đảo ngược để có thứ tự từ cũ -> mới
+    
+    return candles;
   } catch (error) {
-      // Bắt lỗi nếu symbol không hợp lệ hoặc API có vấn đề, trả về mảng rỗng để bot không bị dừng.
-      // console.error(`Lỗi khi lấy nến cho ${symbol}: ${error.message}`);
+      console.error(`Lỗi khi lấy nến cho ${symbol}: ${error.message}`);
       return [];
   }
 }
@@ -45,12 +45,15 @@ export async function getCurrentPrice(symbol) {
     const res = await axios.get(`${BASE_URL}/api/v5/market/ticker`, {
       params: { instId: symbol }
     });
+    
     if (res.data && res.data.data && res.data.data.length > 0) {
-      return Number(res.data.data[0].last);
+      const price = Number(res.data.data[0].last);
+      return price;
     }
+    
     return null;
   } catch (error) {
-    console.error(`❌ Lỗi khi lấy giá cho ${symbol}:`, error.message);
+    console.error(`Lỗi khi lấy giá cho ${symbol}: ${error.message}`);
     return null;
   }
 }
@@ -78,13 +81,12 @@ export async function getAllSymbols() {
         .map(item => item.instId)
         .sort();
       
-      console.log(`📊 Tìm thấy ${symbols.length} symbol từ OKX Futures`);
       return symbols;
     }
     
     return [];
   } catch (error) {
-    console.error('❌ Lỗi khi lấy danh sách symbol:', error.message);
+    console.error(`Lỗi khi lấy danh sách symbol: ${error.message}`);
     return [];
   }
 }
