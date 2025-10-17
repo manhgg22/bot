@@ -44,7 +44,7 @@ const menuOptions = {
   reply_markup: {
     keyboard: [
       ["/status", "/positions", "/stats"],
-      ["/wyckoff_scan", "/quick_scan"],
+      ["/wyckoff_scan", "/quick_scan", "/full_scan"],
       ["💡 Gợi ý LONG", "💡 Gợi ý SHORT"],
       ["/wyckoff BTC", "/volume_profile ETH", "/dual_rsi SOL"],
       ["/theodoi", "/quality", "/risk_check"],
@@ -89,8 +89,8 @@ bot.onText(/\/wyckoff_scan/, async (msg) => {
     await handleWyckoffScanAll(msg.chat.id);
 });
 
-bot.onText(/\/quick_scan/, async (msg) => {
-    await handleQuickVolumeScan(msg.chat.id);
+bot.onText(/\/full_scan/, async (msg) => {
+    await handleFullCoinScan(msg.chat.id);
 });
 bot.onText(/\/stats/, (msg) => { const statsMessage = getTradeStats(); bot.sendMessage(msg.chat.id, statsMessage, { parse_mode: "Markdown" }); });
 bot.onText(/\/theodoi/, async (msg) => { const trades = getOpenTrades(); if (trades.length === 0) { return bot.sendMessage(msg.chat.id, "📭 Bạn không có lệnh nào đang được theo dõi."); } bot.sendMessage(msg.chat.id, "🔍 Đang kiểm tra trạng thái các lệnh..."); let reportMessage = "📊 *BÁO CÁO TRẠNG THÁI LỆNH* 📊\n\n"; const pricePromises = trades.map(trade => getCurrentPrice(trade.symbol)); const currentPrices = await Promise.all(pricePromises); trades.forEach((trade, index) => { const currentPrice = currentPrices[index]; if (currentPrice === null) { reportMessage += `*${trade.symbol}* | ${trade.direction}\n- Không thể lấy giá hiện tại.\n\n`; return; } let pnlPercent = 0; if (trade.direction === 'LONG') { pnlPercent = ((currentPrice - trade.entry) / trade.entry) * 100; } else { pnlPercent = ((trade.entry - currentPrice) / trade.entry) * 100; } const statusIcon = pnlPercent >= 0 ? '🟢' : '🔴'; const formattedPnl = pnlPercent.toFixed(2); reportMessage += `${statusIcon} *${trade.symbol}* | ${trade.direction}\n`; reportMessage += `- Entry: \`${trade.entry}\`\n`; reportMessage += `- Giá hiện tại: \`${currentPrice}\`\n`; reportMessage += `- Lãi/Lỗ: *${formattedPnl}%*\n\n`; }); bot.sendMessage(msg.chat.id, reportMessage, { parse_mode: "Markdown" }); });
@@ -226,7 +226,7 @@ bot.onText(/\/scan_top_100/, async (msg) => {
                     bot.sendMessage(chatId, `📊 Đã quét ${processedCount}/${totalSymbols} coin. Tìm thấy ${signalCount} tín hiệu.`);
                 }
                 
-                await sleep(100); // Tránh rate limit
+                await sleep(300); // Tăng delay để tránh rate limit
                 
             } catch (error) {
                 console.error(`Lỗi quét ${symbol}:`, error);
@@ -278,7 +278,7 @@ bot.onText(/\/scan_all_coins/, async (msg) => {
                     bot.sendMessage(chatId, `📊 Đã quét ${processedCount}/${totalSymbols} coin. Tìm thấy ${signalCount} tín hiệu.`);
                 }
                 
-                await sleep(100); // Tránh rate limit
+                await sleep(300); // Tăng delay để tránh rate limit
                 
             } catch (error) {
                 console.error(`Lỗi quét ${symbol}:`, error);
@@ -2175,14 +2175,16 @@ async function handleWyckoffScanAll(chatId) {
             return;
         }
         
+        // Chỉ quét top 100 coin có volume cao nhất để tránh rate limit
+        const topSymbols = allSymbols.slice(0, 100);
         let wyckoffSignals = [];
-        const totalSymbols = allSymbols.length;
+        const totalSymbols = topSymbols.length;
         let processedCount = 0;
         
-        bot.sendMessage(chatId, `🔍 Bắt đầu phân tích ${totalSymbols} coin với hệ thống Wyckoff...`);
+        bot.sendMessage(chatId, `🔍 Bắt đầu phân tích top ${totalSymbols} coin có volume cao nhất với hệ thống Wyckoff...`);
         
         for (let i = 0; i < totalSymbols; i++) {
-            const symbol = allSymbols[i];
+            const symbol = topSymbols[i];
             
             try {
                 console.log(`[WYCKOFF SCAN] Đang phân tích (${i+1}/${totalSymbols}): ${symbol}`);
@@ -2205,12 +2207,12 @@ async function handleWyckoffScanAll(chatId) {
                 
                 processedCount++;
                 
-                // Cập nhật tiến trình mỗi 50 coin
-                if (processedCount % 50 === 0) {
+                // Cập nhật tiến trình mỗi 20 coin
+                if (processedCount % 20 === 0) {
                     bot.sendMessage(chatId, `⏳ Đã phân tích ${processedCount}/${totalSymbols} coin. Tìm thấy ${wyckoffSignals.length} tín hiệu Wyckoff.`);
                 }
                 
-                await sleep(100); // Tránh rate limit
+                await sleep(500); // Tăng delay để tránh rate limit
                 
             } catch (error) {
                 console.error(`Lỗi phân tích Wyckoff cho ${symbol}:`, error.message);
@@ -2543,6 +2545,125 @@ async function handleWyckoffDailyAnalysis(chatId) {
     }
 }
 
+// ==== QUÉT ĐẦY ĐỦ TẤT CẢ COIN ====
+async function handleFullCoinScan(chatId) {
+    if (isScanning) {
+        return bot.sendMessage(chatId, "⚠️ Bot đang bận, vui lòng thử lại sau.");
+    }
+    
+    bot.sendMessage(chatId, "🔍 Đang quét đầy đủ tất cả coin...\n\n⚠️ *Lưu ý:* Quét này sẽ mất thời gian để tránh rate limit.");
+    isScanning = true;
+    
+    try {
+        const allSymbols = await getAllSymbols();
+        if (!allSymbols || allSymbols.length === 0) {
+            bot.sendMessage(chatId, "❌ Không thể lấy danh sách coin.");
+            return;
+        }
+        
+        let allSignals = [];
+        const totalSymbols = allSymbols.length;
+        let processedCount = 0;
+        
+        bot.sendMessage(chatId, `🔍 Bắt đầu quét đầy đủ ${totalSymbols} coin...`);
+        
+        // Quét theo batch để tránh rate limit
+        const batchSize = 10;
+        for (let i = 0; i < totalSymbols; i += batchSize) {
+            const batch = allSymbols.slice(i, i + batchSize);
+            
+            // Xử lý batch song song nhưng có delay
+            const batchPromises = batch.map(async (symbol, index) => {
+                await sleep(index * 100); // Stagger requests
+                try {
+                    const signal = await getAllSignalsForSymbol(symbol);
+                    if (signal.direction !== 'NONE') {
+                        signal.symbol = symbol;
+                        return signal;
+                    }
+                    return null;
+                } catch (error) {
+                    console.error(`Lỗi quét ${symbol}:`, error.message);
+                    return null;
+                }
+            });
+            
+            const batchResults = await Promise.all(batchPromises);
+            const validSignals = batchResults.filter(signal => signal !== null);
+            allSignals.push(...validSignals);
+            
+            processedCount += batch.length;
+            
+            // Cập nhật tiến trình mỗi 50 coin
+            if (processedCount % 50 === 0) {
+                bot.sendMessage(chatId, `⏳ Đã quét ${processedCount}/${totalSymbols} coin. Tìm thấy ${allSignals.length} tín hiệu.`);
+            }
+            
+            // Delay giữa các batch
+            await sleep(1000);
+        }
+        
+        // Tạo báo cáo tổng hợp
+        if (allSignals.length === 0) {
+            bot.sendMessage(chatId, "✅ Đã quét xong. Không tìm thấy tín hiệu nào phù hợp.");
+            return;
+        }
+        
+        // Sắp xếp theo điểm số
+        allSignals.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+        
+        // Top 20 tín hiệu tốt nhất
+        const topSignals = allSignals.slice(0, 20);
+        
+        let reportMessage = "🔍 *QUÉT ĐẦY ĐỦ - BÁO CÁO TỔNG HỢP*\n\n";
+        reportMessage += `📊 Đã quét: ${totalSymbols} coin\n`;
+        reportMessage += `🎯 Tìm thấy: ${allSignals.length} tín hiệu\n\n`;
+        
+        reportMessage += "🏆 *TOP 20 TÍN HIỆU TỐT NHẤT:*\n\n";
+        
+        topSignals.forEach((signal, index) => {
+            const directionIcon = signal.direction === 'LONG' ? '📈' : '📉';
+            const qualityIcon = signal.confidence > 80 ? '🔥' : signal.confidence > 60 ? '⚡' : '💡';
+            
+            reportMessage += `${index + 1}. ${qualityIcon} *${signal.symbol}* | ${directionIcon} ${signal.direction}\n`;
+            reportMessage += `   📊 Confidence: ${signal.confidence}%\n`;
+            reportMessage += `   💰 Entry: ${signal.price.toFixed(5)}\n`;
+            reportMessage += `   🎯 TP: ${signal.tp.toFixed(5)} | 🛑 SL: ${signal.sl.toFixed(5)}\n\n`;
+        });
+        
+        // Thống kê theo hướng
+        const longSignals = allSignals.filter(s => s.direction === 'LONG');
+        const shortSignals = allSignals.filter(s => s.direction === 'SHORT');
+        
+        reportMessage += "📊 *THỐNG KÊ THEO HƯỚNG:*\n";
+        reportMessage += `📈 LONG: ${longSignals.length} tín hiệu (${((longSignals.length / allSignals.length) * 100).toFixed(1)}%)\n`;
+        reportMessage += `📉 SHORT: ${shortSignals.length} tín hiệu (${((shortSignals.length / allSignals.length) * 100).toFixed(1)}%)\n\n`;
+        
+        // Khuyến nghị
+        reportMessage += "💡 *KHUYẾN NGHỊ:*\n";
+        if (longSignals.length > shortSignals.length) {
+            reportMessage += "📈 Thị trường có xu hướng tích cực - Ưu tiên LONG\n";
+        } else if (shortSignals.length > longSignals.length) {
+            reportMessage += "📉 Thị trường có xu hướng tiêu cực - Ưu tiên SHORT\n";
+        } else {
+            reportMessage += "⚖️ Thị trường cân bằng - Chọn tín hiệu có confidence cao nhất\n";
+        }
+        
+        reportMessage += "\n🛡️ *LƯU Ý QUAN TRỌNG:*\n";
+        reportMessage += "• Ưu tiên vào lệnh với confidence ≥ 70\n";
+        reportMessage += "• Luôn đặt Stop Loss\n";
+        reportMessage += "• Quản lý rủi ro tốt\n";
+        
+        bot.sendMessage(chatId, reportMessage, { parse_mode: "Markdown" });
+        
+    } catch (error) {
+        console.error("Lỗi khi quét đầy đủ:", error);
+        bot.sendMessage(chatId, "❌ Đã xảy ra lỗi trong quá trình quét đầy đủ. Vui lòng thử lại sau.");
+    } finally {
+        isScanning = false;
+    }
+}
+
 // ==== QUÉT NHANH VOLUME PROFILE + KEY VOLUME + DUAL RSI ====
 async function handleQuickVolumeScan(chatId) {
     if (isScanning) {
@@ -2559,14 +2680,16 @@ async function handleQuickVolumeScan(chatId) {
             return;
         }
         
+        // Chỉ quét top 50 coin có volume cao nhất để tránh rate limit
+        const topSymbols = allSymbols.slice(0, 50);
         let volumeSignals = [];
-        const totalSymbols = allSymbols.length;
+        const totalSymbols = topSymbols.length;
         let processedCount = 0;
         
-        bot.sendMessage(chatId, `🔍 Bắt đầu quét nhanh ${totalSymbols} coin...`);
+        bot.sendMessage(chatId, `🔍 Bắt đầu quét nhanh top ${totalSymbols} coin có volume cao nhất...`);
         
         for (let i = 0; i < totalSymbols; i++) {
-            const symbol = allSymbols[i];
+            const symbol = topSymbols[i];
             
             try {
                 console.log(`[QUICK SCAN] Đang phân tích (${i+1}/${totalSymbols}): ${symbol}`);
@@ -2589,12 +2712,12 @@ async function handleQuickVolumeScan(chatId) {
                 
                 processedCount++;
                 
-                // Cập nhật tiến trình mỗi 100 coin
-                if (processedCount % 100 === 0) {
+                // Cập nhật tiến trình mỗi 10 coin
+                if (processedCount % 10 === 0) {
                     bot.sendMessage(chatId, `⏳ Đã quét ${processedCount}/${totalSymbols} coin. Tìm thấy ${volumeSignals.length} tín hiệu volume.`);
                 }
                 
-                await sleep(50); // Quét nhanh hơn
+                await sleep(500); // Tăng delay để tránh rate limit
                 
             } catch (error) {
                 console.error(`Lỗi quét nhanh cho ${symbol}:`, error.message);

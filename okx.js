@@ -8,10 +8,42 @@ const BASE_URL = "https://www.okx.com";
  * Symbol giờ đây sẽ có định dạng là: BTC-USDT-SWAP, ETH-USDT-SWAP, v.v.
  * Hàm này cũng đã được cập nhật để lấy cả dữ liệu Volume.
  */
+// Rate limiting helper
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 100; // 100ms giữa các request (10 req/s)
+
+async function rateLimitedRequest(url, params) {
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastRequestTime;
+  
+  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+    const delay = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+  
+  lastRequestTime = Date.now();
+  
+  try {
+    const res = await axios.get(url, { params });
+    return res;
+  } catch (error) {
+    if (error.response && error.response.status === 429) {
+      // Rate limit hit, wait longer
+      console.log(`Rate limit hit for ${params.instId}, waiting 2 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Retry once
+      return await axios.get(url, { params });
+    }
+    throw error;
+  }
+}
+
 export async function getCandles(symbol, bar = "1H", limit = 100) {
   try {
-    const res = await axios.get(`${BASE_URL}/api/v5/market/candles`, {
-      params: { instId: symbol, bar, limit }
+    const res = await rateLimitedRequest(`${BASE_URL}/api/v5/market/candles`, {
+      instId: symbol, 
+      bar, 
+      limit
     });
 
     if (res.data.code !== '0') {
@@ -42,8 +74,8 @@ export async function getCandles(symbol, bar = "1H", limit = 100) {
  */
 export async function getCurrentPrice(symbol) {
   try {
-    const res = await axios.get(`${BASE_URL}/api/v5/market/ticker`, {
-      params: { instId: symbol }
+    const res = await rateLimitedRequest(`${BASE_URL}/api/v5/market/ticker`, {
+      instId: symbol
     });
     
     if (res.data && res.data.data && res.data.data.length > 0) {
@@ -63,11 +95,9 @@ export async function getCurrentPrice(symbol) {
  */
 export async function getAllSymbols() {
   try {
-    const response = await axios.get(`${BASE_URL}/api/v5/public/instruments`, {
-      params: {
-        instType: 'SWAP',
-        state: 'live'
-      }
+    const response = await rateLimitedRequest(`${BASE_URL}/api/v5/public/instruments`, {
+      instType: 'SWAP',
+      state: 'live'
     });
 
     if (response.data && response.data.data) {
