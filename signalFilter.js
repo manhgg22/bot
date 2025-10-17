@@ -269,7 +269,7 @@ export async function calculateSignalScore(signal, symbol) {
 /**
  * Lọc tín hiệu dựa trên điểm số và các tiêu chí nghiêm ngặt (NÂNG CẤP)
  */
-export async function filterHighQualitySignals(signals, minScore = 60) {
+export async function filterHighQualitySignals(signals, minScore = 45) {
     const filteredSignals = [];
     
     for (const signal of signals) {
@@ -283,15 +283,15 @@ export async function filterHighQualitySignals(signals, minScore = 60) {
             const { details } = scoreResult;
             const { advancedIndicators } = details;
             
-            // Điều kiện bắt buộc cơ bản:
+            // Điều kiện cơ bản (giảm ngưỡng):
             const basicConditions = 
-                details.adxScore >= 20 &&
-                details.structureScore >= 30 &&
-                details.volumeScore >= 50;
+                details.adxScore >= 15 &&
+                details.structureScore >= 20 &&
+                details.volumeScore >= 30;
 
             // Điều kiện linh hoạt với chỉ báo nâng cao (17 chỉ báo):
             const advancedConditions = advancedIndicators && advancedIndicators.summary ? 
-                Object.values(advancedIndicators.summary).filter(Boolean).length >= 5 : false;
+                Object.values(advancedIndicators.summary).filter(Boolean).length >= 3 : false;
 
             // Điều kiện tổng hợp: Cơ bản + Nâng cao
             if (basicConditions && advancedConditions) {

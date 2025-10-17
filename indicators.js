@@ -4,6 +4,7 @@ import { findOrderBlock, detectBOS, findSwingPoints } from "./smc.js";
 import { getOpenTrades, closeTrade } from "./tradeManager.js";
 import { filterHighQualitySignals, generateSignalReport } from "./signalFilter.js";
 import { analyzeRiskAndExitPoints, generateRiskReport } from "./advancedIndicators.js";
+import WyckoffVolumeAnalysis from "./wyckoffVolumeProfile.js";
 
 /* ============== CÁC HÀM TÍNH TOÁN CHỈ BÁO ============== */
 
@@ -111,7 +112,7 @@ export function calcADX(candles, period = 14) {
 /**
  * [MỚI] Hàm tính toán chỉ báo Stochastic RSI.
  */
-function calcStochRSI(candles, rsiPeriod = 14, stochPeriod = 14, kPeriod = 3, dPeriod = 3) {
+export function calcStochRSI(candles, rsiPeriod = 14, stochPeriod = 14, kPeriod = 3, dPeriod = 3) {
     if (candles.length < rsiPeriod + stochPeriod) {
         return null;
     }
@@ -298,43 +299,66 @@ async function getSignalsBollingerBreakout(symbol) {
     }
 }
 
-async function getSignalsStochRSIReversal(symbol) {
+async function getSignalsWyckoffVolume(symbol) {
     try {
-        const candles = await getCandles(symbol, "4H", 100);
-        if (!candles || candles.length < 50) return { direction: "NONE" };
+        const wyckoffAnalyzer = new WyckoffVolumeAnalysis(symbol, '1H', 100);
+        const signalResult = await wyckoffAnalyzer.generateTradingSignal();
         
-        const stochRSI = calcStochRSI(candles);
-        if (!stochRSI) return { direction: "NONE" };
-
-        const { k, d, prev_k, prev_d } = stochRSI;
-        const oversoldLevel = 20;
-        const overboughtLevel = 80;
-
-        const isLongSignal = prev_k < oversoldLevel && k > oversoldLevel && k > d;
-        const isShortSignal = prev_k > overboughtLevel && k < overboughtLevel && k < d;
-
-        if (isLongSignal || isShortSignal) {
-            const lastCandle = candles.at(-1);
-            const atr = calcATR(candles, 14);
-            if (!atr) return { direction: "NONE" };
-            const direction = isLongSignal ? "LONG" : "SHORT";
-            const sl = isLongSignal ? lastCandle.close - 1.5 * atr : lastCandle.close + 1.5 * atr;
-            const tp = isLongSignal ? lastCandle.close + 3.0 * atr : lastCandle.close - 3.0 * atr;
-            return { strategy: "STOCH_RSI_REVERSAL", direction, price: lastCandle.close, tp, sl };
+        if (signalResult.direction === 'NONE') {
+            return { direction: "NONE" };
         }
-        return { direction: "NONE" };
+        
+        // Lấy dữ liệu để tính SL/TP
+        const candles = await getCandles(symbol, "1H", 50);
+        if (!candles || candles.length < 20) return { direction: "NONE" };
+        
+        const currentPrice = candles[candles.length - 1].close;
+        const atr = calcATR(candles, 14);
+        if (!atr) return { direction: "NONE" };
+        
+        // Tính SL/TP dựa trên Volume Profile và ATR
+        const analysis = signalResult.analysis;
+        let sl, tp;
+        
+        if (signalResult.direction === 'LONG') {
+            // SL dựa trên VAL hoặc ATR
+            const val = analysis.volumeProfile.valueArea?.low;
+            sl = val ? Math.min(val, currentPrice - 1.5 * atr) : currentPrice - 1.5 * atr;
+            
+            // TP dựa trên VAH hoặc ATR
+            const vah = analysis.volumeProfile.valueArea?.high;
+            tp = vah ? Math.max(vah, currentPrice + 2.5 * atr) : currentPrice + 2.5 * atr;
+        } else {
+            // SL dựa trên VAH hoặc ATR
+            const vah = analysis.volumeProfile.valueArea?.high;
+            sl = vah ? Math.max(vah, currentPrice + 1.5 * atr) : currentPrice + 1.5 * atr;
+            
+            // TP dựa trên VAL hoặc ATR
+            const val = analysis.volumeProfile.valueArea?.low;
+            tp = val ? Math.min(val, currentPrice - 2.5 * atr) : currentPrice - 2.5 * atr;
+        }
+        
+        return {
+            strategy: "WYCKOFF_VOLUME",
+            direction: signalResult.direction,
+            price: currentPrice,
+            tp: tp,
+            sl: sl,
+            confidence: signalResult.confidence,
+            reason: signalResult.reason,
+            wyckoffAnalysis: analysis
+        };
+        
     } catch (error) {
+        console.error(`Lỗi Wyckoff Volume cho ${symbol}:`, error);
         return { direction: "NONE" };
     }
 }
 
-// [NÂNG CẤP] Sử dụng hệ thống lọc tín hiệu chất lượng cao với StochRSI
+// [WYCKOFF ONLY] Chỉ sử dụng hệ thống Wyckoff Volume Profile + Dual RSI
 export async function getAllSignalsForSymbol(symbol) {
     const strategies = [
-        getSignalsStochRSIReversal, 
-        getSignalsSMC, 
-        getSignalsEMACross, 
-        getSignalsBollingerBreakout
+        getSignalsWyckoffVolume  // Chỉ sử dụng Wyckoff Volume
     ];
     const allSignals = [];
     
@@ -353,7 +377,7 @@ export async function getAllSignalsForSymbol(symbol) {
     }
     
     // Lọc và chấm điểm tín hiệu chất lượng cao
-    const autoThreshold = parseInt(process.env.QUALITY_THRESHOLD_AUTO) || 60;
+    const autoThreshold = parseInt(process.env.QUALITY_THRESHOLD_AUTO) || 45;
     const filteredSignals = await filterHighQualitySignals(allSignals, autoThreshold);
     
     // Trả về tín hiệu tốt nhất (điểm cao nhất)

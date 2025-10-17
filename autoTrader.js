@@ -8,9 +8,9 @@ import { getCurrentPrice } from './okx.js';
 const API_CONFIG = {
     apiKey: "a43bb007-d565-4ebc-81b4-24e9cad93817",
     secretKey: "A796620B299444EEFEB4DCD71FBADCE4",
-    passphrase: "check Tài Khoản", // Bạn cần cung cấp passphrase
+    passphrase: "YOUR_REAL_PASSPHRASE_HERE", // ⚠️ THAY BẰNG PASSPHRASE THỰC TẾ CỦA BẠN
     baseURL: "https://www.okx.com",
-    sandbox: false // Đặt true để test trên sandbox
+    sandbox: true // ⚠️ ĐẶT TRUE ĐỂ TEST TRÊN SANDBOX TRƯỚC
 };
 
 // Cấu hình giao dịch

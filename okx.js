@@ -54,3 +54,37 @@ export async function getCurrentPrice(symbol) {
     return null;
   }
 }
+
+/**
+ * Lấy danh sách tất cả symbol từ OKX Futures
+ */
+export async function getAllSymbols() {
+  try {
+    const response = await axios.get(`${BASE_URL}/api/v5/public/instruments`, {
+      params: {
+        instType: 'SWAP',
+        state: 'live'
+      }
+    });
+
+    if (response.data && response.data.data) {
+      // Lọc chỉ lấy các symbol có volume cao và loại bỏ các symbol không phổ biến
+      const symbols = response.data.data
+        .filter(item => 
+          item.instId && item.instId.includes('USDT') && 
+          !item.instId.includes('TEST') &&
+          !item.instId.includes('DEMO')
+        )
+        .map(item => item.instId)
+        .sort();
+      
+      console.log(`📊 Tìm thấy ${symbols.length} symbol từ OKX Futures`);
+      return symbols;
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('❌ Lỗi khi lấy danh sách symbol:', error.message);
+    return [];
+  }
+}
