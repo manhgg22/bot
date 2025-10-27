@@ -1,0 +1,20 @@
+# Node modules - không upload
+node_modules/
+
+# Environment variables - KHÔNG BAO GIỜ UPLOAD
+.env
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
