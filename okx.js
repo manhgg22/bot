@@ -1,7 +1,43 @@
 // okx.js
 import axios from "axios";
+import dotenv from "dotenv";
 
+dotenv.config();
+
+// Cấu hình Sandbox/Production
+const IS_SANDBOX = process.env.OKX_SANDBOX === 'true';
 const BASE_URL = "https://www.okx.com";
+const API_BASE_URL = "https://www.okx.com";
+
+console.log(`🔧 OKX Mode: ${IS_SANDBOX ? 'SANDBOX (Data only - No real trading)' : 'PRODUCTION (Real trading enabled)'}`);
+
+/**
+ * Kiểm tra xem có đang ở chế độ sandbox không
+ */
+export function isSandboxMode() {
+  return IS_SANDBOX;
+}
+
+/**
+ * Hàm mô phỏng giao dịch cho sandbox mode
+ */
+export function simulateOrder(symbol, side, amount, price) {
+  if (!IS_SANDBOX) {
+    throw new Error("simulateOrder chỉ dùng trong sandbox mode");
+  }
+  
+  // Mô phỏng response từ OKX
+  return {
+    success: true,
+    orderId: `SANDBOX_${Date.now()}`,
+    symbol: symbol,
+    side: side,
+    amount: amount,
+    price: price,
+    status: 'filled',
+    message: 'Sandbox order - No real money involved'
+  };
+}
 
 /**
  * [NÂNG CẤP] Lấy dữ liệu nến từ thị trường Futures (SWAP) của OKX.
@@ -40,7 +76,7 @@ async function rateLimitedRequest(url, params) {
 
 export async function getCandles(symbol, bar = "1H", limit = 100) {
   try {
-    const res = await rateLimitedRequest(`${BASE_URL}/api/v5/market/candles`, {
+    const res = await rateLimitedRequest(`${API_BASE_URL}/api/v5/market/candles`, {
       instId: symbol, 
       bar, 
       limit
@@ -74,7 +110,7 @@ export async function getCandles(symbol, bar = "1H", limit = 100) {
  */
 export async function getCurrentPrice(symbol) {
   try {
-    const res = await rateLimitedRequest(`${BASE_URL}/api/v5/market/ticker`, {
+    const res = await rateLimitedRequest(`${API_BASE_URL}/api/v5/market/ticker`, {
       instId: symbol
     });
     
@@ -95,7 +131,7 @@ export async function getCurrentPrice(symbol) {
  */
 export async function getAllSymbols() {
   try {
-    const response = await rateLimitedRequest(`${BASE_URL}/api/v5/public/instruments`, {
+    const response = await rateLimitedRequest(`${API_BASE_URL}/api/v5/public/instruments`, {
       instType: 'SWAP',
       state: 'live'
     });
